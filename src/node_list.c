@@ -18,9 +18,10 @@
 #include "name_service.h"
 #include "head4sock.h"
 #include <arpa/inet.h>
+#include "crc16.h"
 
-//接收回应信息
-reply_struct reply;
+//创建设备信息结构体数组指针
+preply_struct reply_list;
 
 #if 0
 static void signal_handler(int i)
@@ -51,7 +52,7 @@ static void do_query(AST_Device_Type device_type, AST_Device_Function device_fun
 	struct sockaddr_in addr;
 	socklen_t addr_len = sizeof(addr);
 	query_struct query;
-//	reply_struct reply;
+	reply_struct reply;
 	char grp_addr[] = AST_NAME_SERVICE_GROUP_ADDR;
 	
 	q_fd = udp_create_sender();
@@ -80,6 +81,7 @@ static void do_query(AST_Device_Type device_type, AST_Device_Function device_fun
 	info(">>>>>\n");
 	while (select(r_fd + 1, &fds, NULL, NULL, &timeout) > 0)
 	{
+		reply.device_mac[0] = '\0'; //fix rechive empty bug
 		ret = recvfrom(r_fd, &reply, sizeof(reply), 0, (struct sockaddr *)&addr, &addr_len);
 		if (ret == -1) {
 			err("recvfrom error (%d)\n", errno);
@@ -125,6 +127,15 @@ static void do_query(AST_Device_Type device_type, AST_Device_Function device_fun
 #endif
 //			info("device status: %d\n", reply.device_status);
 			info("%s", reply.device_status);
+			
+			if (strlen(reply.device_mac) > 0)  
+			{
+				info("%s\t",reply.device_mac);
+				info("%s",reply.device_version);
+			} else {
+				info("%s\t","Unknown");
+				info("%s","Unknown");
+			}
 			info("\n");
 			//info("--------------------------------------------------\n");
 		}
@@ -145,7 +156,7 @@ static void do_query_json(AST_Device_Type device_type, AST_Device_Function devic
 	struct sockaddr_in addr;
 	socklen_t addr_len = sizeof(addr);
 	query_struct query;
-//	reply_struct reply;
+	reply_struct reply;
 	char grp_addr[] = AST_NAME_SERVICE_GROUP_ADDR;
 	int node_cnt = 0;
 	
@@ -174,6 +185,7 @@ static void do_query_json(AST_Device_Type device_type, AST_Device_Function devic
 	info("{\n");
 	while (select(r_fd + 1, &fds, NULL, NULL, &timeout) > 0)
 	{
+		reply.device_mac[0] = '\0';  //fix rechive empty bug
 		ret = recvfrom(r_fd, &reply, sizeof(reply), 0, (struct sockaddr *)&addr, &addr_len);
 		if (ret == -1) {
 			err("recvfrom error (%d)\n", errno);
@@ -194,6 +206,11 @@ static void do_query_json(AST_Device_Type device_type, AST_Device_Function devic
 			info("\t\"ip\":\"%s\",\n", inet_ntoa(addr.sin_addr));
 			info("\t\"host_name\":\"%s\",\n", reply.device_name);
 			info("\t\"status\":\"%s\",\n", reply.device_status);
+			if (strlen(reply.device_mac) > 0) { 
+			    info("\t\"is_host\":\"%s\",\n", (reply.device_type == Type_Host)?("y"):("n"));
+				info("\t\"mac\":\"%s\",\n",reply.device_mac);
+				info("\t\"version\":\"%s\"\n",reply.device_version);
+			}
 			info("\t\"is_host\":\"%s\"\n", (reply.device_type == Type_Host)?("y"):("n"));
 			// End of data
 			info("}");
@@ -299,11 +316,10 @@ int main(int argc, char *argv[])
 	步骤：
 	1. 创建套接字，进行监听
 
-	2. 执行node_list操作，获取设备情况并返回
+	2. 判断最后一位是否为OxFF，是则crc校验数据包
 
-	3. 等待接收文件（tftp）
+	3. 通过自定义的数据包命令码执行不同操作
 
-	4. 接收文件后，运行MD5校验，将md5的值发送给设备
 	*/
 	if(argc != 2)
 	{
@@ -316,7 +332,7 @@ int main(int argc, char *argv[])
 
 	//创建一个接收信息的节点
 	user_json_struct buf_json;
-	int buf_len = 0;
+	int buf_len = 0， login_status = 0;
 
 	// 绑定地址（IP:PORT）
 	struct sockaddr_in srvaddr;
@@ -340,27 +356,48 @@ int main(int argc, char *argv[])
 			{
 				//登录服务器
 				case PC_login:
-
+					if(!strncmp(buf_json.data_log.data_user, AST_SERVER_UASE_NAME, 6)
+							&& (buf_json.data_log.data_passwd == AST_SERVER_PASSWORD))
+						login_status = 1;
+						
+					break;
+					
 				//注销登录
 				case PC_logout:
-
+					if(!strncmp(buf_json.data_log.data_user, AST_SERVER_UASE_NAME, 6)
+							&& (buf_json.data_log.data_passwd == AST_SERVER_PASSWORD))
+						login_status = 0;
+						
+					break;
+					
 				//获取设备信息
 				case PC_device_list:
+					if(login_status){
 						//接收获取设备信息的命令，执行node_list
 						node_list(argc, argv);
 
 						//返回数据给PC端软件
-						while(!write(fd_udp, &reply, sizeof(reply)));
-						break;
+						while(sendto(fd_udp, &reply, sizeof(reply), 0, (struct sockadd *)&srvaddr, len) < 0);
+					}
+					break;
 
 				//更新设备
 				case PC_update_device:
-
+					if(login_status){
+						
+					}
+					break;
 				//取消更新
 				case PC_cancel_update:
-
+					if(login_status){
+					
+					}
+					break;
 				//固件上传
 				case PC_firmware_upload:	
+					if(login_status){
+					
+					}
 					break;
 			}
 		}

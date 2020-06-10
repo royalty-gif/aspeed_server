@@ -12,6 +12,8 @@
 
 #define AST_NAME_SERVICE_QUERY_PORT 3333
 #define AST_NAME_SERVICE_REPLY_PORT 3334
+#define AST_SERVER_UASE_NAME “aspeed”
+#define AST_SERVER_PASSWORD 123456
 
 typedef enum _AST_Device_Type_
 {
@@ -59,7 +61,9 @@ typedef struct _query_struct_
 
 #define MAX_STATUS_LENGTH 32
 #define MAX_NAME_LENGTH 256
-#define MAX_DATA_LENGTH 32
+#define MAX_VERSION_LENGTH 32
+#dedine MAX_MAC_ADDRESS 16
+
 typedef struct _reply_struct_
 {
 	AST_Device_Type	device_type;
@@ -69,12 +73,14 @@ typedef struct _reply_struct_
 	char device_status[MAX_STATUS_LENGTH];
 //	unsigned int	device_name_length;
 	char device_name[MAX_NAME_LENGTH];
+	char device_mac[MAX_MAC_ADDRESS];
+	char device_version[MAX_VERSION_LENGTH];
 }reply_struct, *preply_struct;
 
 typedef struct _data_log_struct_
 {
-	char data_user[MAX_DATA_LENGTH];
-	char data_passwd[MAX_DATA_LENGTH];
+	char *data_user;
+	int data_passwd;
 } data_log_struct;
 
 typedef struct _user_json_struct_
