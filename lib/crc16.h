@@ -7,9 +7,10 @@ extern "C" {
 #endif /* __cplusplus  */
 
 unsigned short crc16_ccitt(const unsigned char *buf, int len);
-int check(int crc, const unsigned char *buf, int sz)；
+int check(int crc, const unsigned char *buf, int sz);
 
 #ifdef __cplusplus
 }
 #endif /* __cplusplus  */
 #endif
+

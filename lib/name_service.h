@@ -12,9 +12,14 @@
 
 #define AST_NAME_SERVICE_QUERY_PORT 3333
 #define AST_NAME_SERVICE_REPLY_PORT 3334
-#define AST_SERVER_UASE_NAME “aspeed”
+#define AST_SERVER_UASE_NAME "aspeed"
 #define AST_SERVER_PASSWORD 123456
 
+#include <iostream>
+#include <string>
+
+using namespace std;
+ 
 typedef enum _AST_Device_Type_
 {
 	Type_Any = 0,
@@ -41,7 +46,7 @@ typedef enum _AST_Device_Status_
 	Status_Unknown,
 } AST_Device_Status ;
 
-typedef enum _AST_USER_ACTIONCODE_
+enum
 {
 	PC_login = 5000,
 	PC_logout,
@@ -49,7 +54,7 @@ typedef enum _AST_USER_ACTIONCODE_
 	PC_update_device,
 	PC_cancel_update,
 	PC_firmware_upload,
-} AST_USER_ACTIONCODE;
+};
 
 
 typedef struct _query_struct_
@@ -62,8 +67,9 @@ typedef struct _query_struct_
 #define MAX_STATUS_LENGTH 32
 #define MAX_NAME_LENGTH 256
 #define MAX_VERSION_LENGTH 32
-#dedine MAX_MAC_ADDRESS 16
+#define MAX_MAC_ADDRESS 16
 
+//  收到设备的信息结构体
 typedef struct _reply_struct_
 {
 	AST_Device_Type	device_type;
@@ -77,20 +83,29 @@ typedef struct _reply_struct_
 	char device_version[MAX_VERSION_LENGTH];
 }reply_struct, *preply_struct;
 
+//  json内容的一部分：数据信息部分
 typedef struct _data_log_struct_
 {
-	char *data_user;
+	string data_user;
 	int data_passwd;
 } data_log_struct;
 
-typedef struct _user_json_struct_
+//  json格式的内容
+typedef struct _json_struct_
 {
-	AST_USER_ACTIONCODE user_actioncode;
-	char device_name[MAX_NAME_LENGTH];
+	int user_actioncode;
+	string device_name;
 	data_log_struct data_log;
 	int msg_id;
+} json_struct,*pjson_struct;
 
-} user_json_struct,*puser_json_struct;
+//  发送/接收数据包格式：json + crc + OxFF
+typedef struct _PC_data_struct_
+{
+	json_struct _json;
+	short int crc_data;
+	char end_mark;
+}PC_data_struct, *pPC_data_struct;
 
 //AST_Device_Status device_status = Status_Unknown;
 #define AST_NAME_SERVICE_GROUP_ADDR "225.1.0.0";

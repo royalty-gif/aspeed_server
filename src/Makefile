@@ -1,9 +1,9 @@
 
-cc=gcc
+cc=g++
 cflags=-O3 -g
 ldflags=-g 
 CFLAGS=-I ../lib/
-OBJ = node_list.o astnetwork.o wrap.o 
+OBJ = node_list.o astnetwork.o wrap.o crc16.o
 
 default: build
 	@echo "Done"
