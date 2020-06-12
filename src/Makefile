@@ -13,7 +13,7 @@ build: node_list
 node_list: $(OBJ)
 	$(cc) $(ldflags) $(CFLAGS) -o node_list $(OBJ)
 
-%.o: %.c Makefile
+%.o: %.cpp Makefile
 	${cc} $(CFLAGS) ${cflags} -c $<
 	
 clean:
