@@ -18,12 +18,15 @@
 #include "head4sock.h"
 #include <arpa/inet.h>
 #include "crc16.h"
+#include "md5.h"
 
 #include "rapidjson/document.h"
 #include "rapidjson/stringbuffer.h"
 #include "rapidjson/writer.h"
 #include <iostream>
 #include <string>
+#include <vector>
+#include <ctime>
 
 using namespace std;
 
@@ -315,9 +318,7 @@ void node_list(int argc, char *argv[])
 		default:
 			err("unknown cmd\n");
 	}
-
 }
-
 }
 //JSON解析
 
@@ -341,7 +342,7 @@ PC_data_struct parse_json(string jsondata) {
 			}
 			
 			//提取设备名
-			if(object.HasMember("data_log"))
+			if(object.HasMember("device_name"))
 			{
 				ret._json.device_name = object["device_name"].GetString();
 			}
@@ -349,18 +350,9 @@ PC_data_struct parse_json(string jsondata) {
 			//提取数据信息
 			if(doc.HasMember("data_log"))
 			{
-				const rapidjson::Value& data = doc["data_log"];
-				if(data.HasMember("data_user"))
-				{
-					ret._json.data_log.data_user = data["data_user"].GetString();
-				}
-				
-				if(data.HasMember("data_passwd"))
-				{
-					ret._json.data_log.data_passwd = data["data_user"].GetInt();
-				}					
-
+				ret._json.data_log = object["data_log"].GetString();
 			}
+			
 			//提取信息id
 			if(object.HasMember("msg_id"))
 			{
@@ -381,8 +373,104 @@ PC_data_struct parse_json(string jsondata) {
 
 	return ret;
 }
+//分割string字符串函数
+void SplitString(const string& s, vector<string>& v, const string& c)
+{
+    string::size_type pos1, pos2;
+    pos2 = s.find(c);
+    pos1 = 0;
+    while(string::npos != pos2)
+    {
+        v.push_back(s.substr(pos1, pos2-pos1));
+         
+        pos1 = pos2 + c.size();
+        pos2 = s.find(c, pos1);
+    }
+    if(pos1 != s.length())
+        v.push_back(s.substr(pos1));
+}
 
+//时间函数
+int message_timeid(void)
+{
+	static int time_id = 0;    //用于记录id前四位
+	static int time_count = 0; //用于记录id最后一位，也是相同时间内信息条数
+	
+	int temp_id = 0;
+	time_t now = time(0);  //基于当前系统的当前时间
+	
+	tm *ltm = localtime(&now);
+	temp_id = ltm->tm_min * 1000 + ltm->tm_sec * 10;
+	if(temp_id == time_id)
+	{
+		++time_count;
+		if(time_count > 10)
+			time_count = 0;
+	}
+	else 
+	{
+		time_id = temp_id;
+	}
+	
+	return (temp_id * 10 + time_count);
+}
 
+//封装函数响应PC
+PC_data_struct data_packing_toPC(int user_actioncode, string result, int crc, const unsigned char *buf, int size)
+{
+	PC_data_struct data_package; 	
+	memset(&data_package, 0, sizeof(data_package));
+	
+	data_package._json.user_actioncode = user_actioncode;
+	data_package._json.device_name = "KVM_SERVER_9500";
+	data_package._json.msg_id = message_timeid();
+	switch(user_actioncode)  //封装data_log
+	{
+		case Server_return_login:
+			if(result == "200")
+			{
+				data_package._json.data_log = "success";
+			}
+			else if(result == "406")
+			{
+				data_package._json.data_log = "failed";
+			}
+			break;
+			
+		case Server_return_logout:
+			if(result == "200")
+			{
+				data_package._json.data_log = "success";
+			}
+			else if(result == "406")
+			{
+				data_package._json.data_log = "failed";
+			}
+			break;
+			
+		case Server_return_device_list:
+			break;
+			
+		case Server_return_update:
+			break;
+			
+		case Server_return_cancel_update:
+			break;
+			
+		case Server_return_upload:
+			break;
+			
+		case Server_return_redled_reply:
+			break;
+	}
+	
+	//添加crc字段
+	data_package.crc_data = check(crc, buf, size);
+	//添加结束符OxFF
+	data_package.end_mark = 0xFF;
+	
+	return data_package;
+}
 int main(int argc, char *argv[])
 {
 	/*
@@ -403,10 +491,16 @@ int main(int argc, char *argv[])
 	// 创建一个UDP套接字
 	int fd_udp = Socket(AF_INET, SOCK_DGRAM, 0);
 
-	//创建一个接收信息的节点
-	PC_data_struct buf_json;
+	//创建一个发送/接收信息的节点
+	PC_data_struct buf_json, send_data;
 	string recv_json;
 	int buf_len = 0,login_status = 0;
+	
+	//md5检验储存
+	char md5_str[MD5_STR_LEN + 1];
+	
+	//定义一个vector存储每个分割的字符串
+	vector<string> v;
 
 	// 绑定地址（IP:PORT）
 	struct sockaddr_in srvaddr;
@@ -422,8 +516,11 @@ int main(int argc, char *argv[])
 
 	while(1)
 	{
-		memset(&buf_json, 0, SIZE);
-		buf_len = recvfrom(fd_udp, &recv_json, sizeof(recv_json), 0, NULL, NULL);
+		memset(&buf_json, 0, sizeof(buf_json));
+		memset(&send_data, 0, sizeof(send_data));
+		memset(md5_str, 0, MD5_STR_LEN + 1);
+		v.clear();
+		buf_len = recvfrom(fd_udp, &recv_json, sizeof(recv_json), 0, (struct sockaddr *)&srvaddr, &len);
 		if(buf_len > 0)
 		{
 			buf_json = parse_json(recv_json);
@@ -433,23 +530,51 @@ int main(int argc, char *argv[])
 				perror("end_mark");
 				continue;
 			}
-			
+			SplitString(buf_json._json.data_log, v, ","); //按逗号来分割字符串
 			switch(buf_json._json.user_actioncode)
 			{
 				//登录服务器
 				case  PC_login:
-					if((buf_json._json.data_log.data_user == AST_SERVER_UASE_NAME)
-							&& (buf_json._json.data_log.data_passwd == AST_SERVER_PASSWORD))
-						login_status = 1;
+					Compute_string_md5((unsigned char *)AST_SERVER_PASSWORD, strlen(AST_SERVER_PASSWORD), md5_str);
+					
+					if((AST_SERVER_UASE_NAME == v[0])  && (v[1] == md5_str)){
+							login_status = 1;
+							send_data =data_packing_toPC(Server_return_login, "200", 
+													buf_json.crc_data, (const unsigned char *)&(buf_json._json), sizeof(buf_json._json));
+											
+							if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
+									perror("PC_login_sendto");
+					}
+					else{
+							send_data = data_packing_toPC(Server_return_login, "406", 
+													buf_json.crc_data, (const unsigned char *)&(buf_json._json), sizeof(buf_json._json));
+													
+							if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
+									perror("PC_login_sendto");					
+					}	
 						
 					break;
 					
 				//注销登录
 				case PC_logout:
-					if((buf_json._json.data_log.data_user == AST_SERVER_UASE_NAME)
-							&& (buf_json._json.data_log.data_passwd == AST_SERVER_PASSWORD))
-						login_status = 0;
-						
+					Compute_string_md5((unsigned char *)AST_SERVER_PASSWORD, strlen(AST_SERVER_PASSWORD), md5_str);
+					
+					if((AST_SERVER_UASE_NAME == v[0])  && (v[1] == md5_str))
+					{
+							login_status = 0;
+							send_data = data_packing_toPC(Server_return_login, "200", 
+													buf_json.crc_data, (const unsigned char *)&(buf_json._json), sizeof(buf_json._json));
+													
+							if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
+									perror("PC_logout_sendto");						
+					}
+					else{
+							send_data = data_packing_toPC(Server_return_login, "406", 
+													buf_json.crc_data, (const unsigned char *)&(buf_json._json), sizeof(buf_json._json));
+													
+							if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
+									perror("PC_logout_sendto");						
+					}		
 					break;
 					
 				//获取设备信息
@@ -459,7 +584,8 @@ int main(int argc, char *argv[])
 						node_list(argc, argv);
 
 						//返回数据给PC端软件
-						while(sendto(fd_udp, &reply_list, sizeof(reply_list), 0, (struct sockaddr *)&srvaddr, len) < 0);
+						if(sendto(fd_udp, &reply_list, sizeof(reply_list), 0, (struct sockaddr *)&srvaddr, len) < 0)
+								perror("PC_device_list_sendto");	
 					}
 					break;
 
@@ -477,6 +603,12 @@ int main(int argc, char *argv[])
 					break;
 				//固件上传
 				case PC_firmware_upload:	
+					if(login_status){
+					
+					}
+					break;
+				//触发灯操作
+				case PC_redled_blink_trigger:
 					if(login_status){
 					
 					}

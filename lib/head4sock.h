@@ -13,8 +13,6 @@
 #include <arpa/inet.h>
 #include <poll.h>
 
-#define SIZE 100
-
 
 ssize_t Write(int fildes, const void *buf, size_t nbyte);
 int Socket(int domain, int type, int protocol);

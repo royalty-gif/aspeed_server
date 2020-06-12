@@ -13,8 +13,9 @@
 #define AST_NAME_SERVICE_QUERY_PORT 3333
 #define AST_NAME_SERVICE_REPLY_PORT 3334
 #define AST_SERVER_UASE_NAME "aspeed"
-#define AST_SERVER_PASSWORD 123456
+#define AST_SERVER_PASSWORD "123456"
 
+#define SIZE 100
 #include <iostream>
 #include <string>
 
@@ -46,7 +47,8 @@ typedef enum _AST_Device_Status_
 	Status_Unknown,
 } AST_Device_Status ;
 
-enum
+//PC对服务器的操作码
+typedef enum _PC_toSer_ActionCode_
 {
 	PC_login = 5000,
 	PC_logout,
@@ -54,7 +56,28 @@ enum
 	PC_update_device,
 	PC_cancel_update,
 	PC_firmware_upload,
-};
+	PC_redled_blink_trigger,
+}PC_toSer_ActionCode;
+
+//服务器对PC的相应操作码
+typedef enum _Server_toPC_ActionCode_
+{
+	Server_return_login = 5100,
+	Server_return_logout,
+	Server_return_device_list,
+	Server_return_update,
+	Server_return_cancel_update,
+	Server_return_upload,
+	Server_return_redled_reply,
+}Server_toPC_ActionCode;
+
+//服务器对设备的操作码
+typedef enum _Server_todev_ActionCode_
+{
+	Server_get_md5value = 5200,
+	Server_start_file_tran,
+	Server_update_device,
+}Server_todev_ActionCode;
 
 
 typedef struct _query_struct_
@@ -83,19 +106,13 @@ typedef struct _reply_struct_
 	char device_version[MAX_VERSION_LENGTH];
 }reply_struct, *preply_struct;
 
-//  json内容的一部分：数据信息部分
-typedef struct _data_log_struct_
-{
-	string data_user;
-	int data_passwd;
-} data_log_struct;
 
 //  json格式的内容
 typedef struct _json_struct_
 {
 	int user_actioncode;
 	string device_name;
-	data_log_struct data_log;
+	string data_log;
 	int msg_id;
 } json_struct,*pjson_struct;
 
