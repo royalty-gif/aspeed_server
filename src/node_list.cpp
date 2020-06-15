@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <getopt.h>
 #include <signal.h>
 #include "debug.h"
@@ -30,15 +31,14 @@
 
 using namespace std;
 
-extern "C"{
-//创建设备信息结构体数组指针
-preply_struct reply_list;
+
+//创建一个容器收集设备信息
+vector<string> vdata_list;
 
 #if 0
 static void signal_handler(int i)
 {
 	dbg("signal catched, code %d", i);
-
 }
 
 static void set_signal(void)
@@ -53,8 +53,37 @@ static void set_signal(void)
 }
 #endif
 
+/*********设备信息结构体处理***********
+顺序：
+	device_name
+	device_version
+	device_mac
+	ip_addr
+	device_type
+	
+返回值：无
+**************************************/
+void _device_msg_deal(reply_struct * _reply, vector<string>& _vdata_deal, char *ip_addr)
+{
+	_vdata_deal.push_back(_reply->device_name);
+	_vdata_deal.push_back(_reply->device_version);
+	_vdata_deal.push_back(_reply->device_mac);
+	_vdata_deal.push_back(ip_addr);
+
+	if(_reply->device_type == Type_Host)
+		_vdata_deal.push_back("TX");
+	else if(_reply->device_type == Type_Client)
+		_vdata_deal.push_back("RX");
+	else{
+		perror("_device_msg_deal:");
+		exit(1);
+	}
+	_vdata_deal.push_back(";");
+	
+}
+
 #define WAIT_REPLY_TIMEOUT 3
-static void do_query(AST_Device_Type device_type, AST_Device_Function device_function)
+void do_query(AST_Device_Type device_type, AST_Device_Function device_function)
 {
 	int q_fd, r_fd;
 	struct timeval timeout;
@@ -64,6 +93,7 @@ static void do_query(AST_Device_Type device_type, AST_Device_Function device_fun
 	socklen_t addr_len = sizeof(addr);
 	query_struct query;
 	reply_struct reply;
+	
 	char grp_addr[] = AST_NAME_SERVICE_GROUP_ADDR;
 	
 	q_fd = udp_create_sender();
@@ -103,6 +133,8 @@ static void do_query(AST_Device_Type device_type, AST_Device_Function device_fun
 			err("peer shutdowned");
 			break;
 		} else {
+		
+			_device_msg_deal(&reply, vdata_list, inet_ntoa(addr.sin_addr));
 			info("%s\t", inet_ntoa(addr.sin_addr));
 			info("%s\t", reply.device_name);
 #if 0
@@ -151,6 +183,8 @@ static void do_query(AST_Device_Type device_type, AST_Device_Function device_fun
 			//info("--------------------------------------------------\n");
 		}
 	}
+	
+	vdata_list.pop_back();
 	info("<<<<<\n");
 	close(r_fd);
 	close(q_fd);
@@ -211,6 +245,8 @@ static void do_query_json(AST_Device_Type device_type, AST_Device_Function devic
 				info(",\n");
 			}
 			node_cnt++;
+			
+			_device_msg_deal(&reply, vdata_list, inet_ntoa(addr.sin_addr));
 			// item name: == ip
 			info("\"%s\":\n{\n", reply.device_name);
 			// Start of data
@@ -228,6 +264,7 @@ static void do_query_json(AST_Device_Type device_type, AST_Device_Function devic
 			//info("--------------------------------------------------\n");
 		}
 	}
+	vdata_list.pop_back();
 	info("\n}\n");
 	close(r_fd);
 	close(q_fd);
@@ -319,8 +356,8 @@ void node_list(int argc, char *argv[])
 			err("unknown cmd\n");
 	}
 }
-}
-//JSON解析
+
+/***************JSON解析***********************/
 
 PC_data_struct parse_json(string jsondata) {
 	PC_data_struct ret;
@@ -373,7 +410,9 @@ PC_data_struct parse_json(string jsondata) {
 
 	return ret;
 }
-//分割string字符串函数
+
+/***************分割string字符串函数***********************/
+
 void SplitString(const string& s, vector<string>& v, const string& c)
 {
     string::size_type pos1, pos2;
@@ -390,7 +429,8 @@ void SplitString(const string& s, vector<string>& v, const string& c)
         v.push_back(s.substr(pos1));
 }
 
-//时间函数
+/***************时间函数***********************/
+
 int message_timeid(void)
 {
 	static int time_id = 0;    //用于记录id前四位
@@ -415,10 +455,17 @@ int message_timeid(void)
 	return (temp_id * 10 + time_count);
 }
 
-//封装函数响应PC
-PC_data_struct data_packing_toPC(int user_actioncode, string result, int crc, const unsigned char *buf, int size)
+/************封装函数响应PC*************
+user_actioncode：命令码
+result：返回的结果（成功: 200; 失败: 406）
+
+返回：封装好的可以直接发给PC的数据包
+
+***************************************/
+
+PC_resdata_struct data_packing_toPC(int user_actioncode, string result)
 {
-	PC_data_struct data_package; 	
+	PC_resdata_struct data_package; 	
 	memset(&data_package, 0, sizeof(data_package));
 	
 	data_package._json.user_actioncode = user_actioncode;
@@ -429,10 +476,12 @@ PC_data_struct data_packing_toPC(int user_actioncode, string result, int crc, co
 		case Server_return_login:
 			if(result == "200")
 			{
+				data_package._json.result = "200";
 				data_package._json.data_log = "success";
 			}
 			else if(result == "406")
 			{
+				data_package._json.result = "406";
 				data_package._json.data_log = "failed";
 			}
 			break;
@@ -440,24 +489,30 @@ PC_data_struct data_packing_toPC(int user_actioncode, string result, int crc, co
 		case Server_return_logout:
 			if(result == "200")
 			{
+				data_package._json.result = "200";
 				data_package._json.data_log = "success";
 			}
 			else if(result == "406")
 			{
+				data_package._json.result = "406";
 				data_package._json.data_log = "failed";
 			}
 			break;
 			
 		case Server_return_device_list:
+			data_package._json.result = "200";
+			for(int i = 0; i<vdata_list.size(); i++)
+			{
+				data_package._json.data_log += vdata_list[i];
+			}
+			data_package._json.data_log += '\0';
 			break;
 			
 		case Server_return_update:
+			
 			break;
 			
 		case Server_return_cancel_update:
-			break;
-			
-		case Server_return_upload:
 			break;
 			
 		case Server_return_redled_reply:
@@ -465,12 +520,46 @@ PC_data_struct data_packing_toPC(int user_actioncode, string result, int crc, co
 	}
 	
 	//添加crc字段
-	data_package.crc_data = check(crc, buf, size);
+	data_package.crc_data =crc16_ccitt((const unsigned char *)&data_package, sizeof(data_package));
 	//添加结束符OxFF
 	data_package.end_mark = 0xFF;
 	
 	return data_package;
 }
+
+/************获取文件*************/
+
+void do_get(int fd_udp, struct sockaddr *sender, socklen_t *len, char *local_file)
+{
+
+	struct Transfer_packet tran_packet;
+	int r_size = 0;
+	PC_resdata_struct send_error_data;
+	
+	memset(&tran_packet, 0, sizeof(tran_packet));
+	FILE *fp = fopen(local_file, "w");
+	if(fp == NULL){
+		printf("Create file \"%s\" error.\n", local_file);
+		return;
+	}
+	
+	do{
+		r_size = recvfrom(fd_udp, &tran_packet, sizeof(struct Transfer_packet), MSG_DONTWAIT, sender, len);
+		
+		if(r_size > 0 && r_size < 7){
+			perror("do_get:");
+			send_error_data = data_packing_toPC(Server_return_login, "404");
+			sendto(fd_udp, &send_error_data, sizeof(send_error_data), 0, sender, *len);
+		}
+		else{
+			fwrite(tran_packet.data, 1, r_size - 7, fp);
+		}
+	}while(r_size != -1);
+	
+	
+}
+
+
 int main(int argc, char *argv[])
 {
 	/*
@@ -482,17 +571,13 @@ int main(int argc, char *argv[])
 	3. 通过自定义的数据包命令码执行不同操作
 
 	*/
-	if(argc != 2)
-	{
-		printf("Usage: %s <PORT>\n", argv[0]);
-		exit(0);
-	}
 
 	// 创建一个UDP套接字
 	int fd_udp = Socket(AF_INET, SOCK_DGRAM, 0);
 
-	//创建一个发送/接收信息的节点
-	PC_data_struct buf_json, send_data;
+	//创建一个接收/发送信息的节点
+	PC_data_struct buf_json ;
+	PC_resdata_struct send_data;
 	string recv_json;
 	int buf_len = 0,login_status = 0;
 	
@@ -508,7 +593,7 @@ int main(int argc, char *argv[])
 	bzero(&srvaddr, len);
 
 	srvaddr.sin_family = AF_INET;
-	srvaddr.sin_port = htons(atoi(argv[1]));
+	srvaddr.sin_port = htons(atoi(AST_CONNECT_PORT));
 	srvaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
 	//绑定本地IP和端口
@@ -525,9 +610,12 @@ int main(int argc, char *argv[])
 		{
 			buf_json = parse_json(recv_json);
 			
-			if(buf_json.end_mark != 0xFF)
+			if(buf_json.end_mark != 0xFF && check(buf_json.crc_data, (const unsigned char *)&buf_json._json, sizeof(buf_json._json)))
 			{
-				perror("end_mark");
+				perror("end_mark or check crc");
+				send_data = data_packing_toPC(Server_return_login, "404");
+				if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
+					perror("PC_login_sendto");
 				continue;
 			}
 			SplitString(buf_json._json.data_log, v, ","); //按逗号来分割字符串
@@ -539,20 +627,14 @@ int main(int argc, char *argv[])
 					
 					if((AST_SERVER_UASE_NAME == v[0])  && (v[1] == md5_str)){
 							login_status = 1;
-							send_data =data_packing_toPC(Server_return_login, "200", 
-													buf_json.crc_data, (const unsigned char *)&(buf_json._json), sizeof(buf_json._json));
-											
-							if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
-									perror("PC_login_sendto");
+							send_data =data_packing_toPC(Server_return_login, "200");											
 					}
 					else{
-							send_data = data_packing_toPC(Server_return_login, "406", 
-													buf_json.crc_data, (const unsigned char *)&(buf_json._json), sizeof(buf_json._json));
-													
-							if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
-									perror("PC_login_sendto");					
+							send_data = data_packing_toPC(Server_return_login, "406");				
 					}	
-						
+					
+					if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
+							perror("PC_login_sendto");	
 					break;
 					
 				//注销登录
@@ -562,55 +644,59 @@ int main(int argc, char *argv[])
 					if((AST_SERVER_UASE_NAME == v[0])  && (v[1] == md5_str))
 					{
 							login_status = 0;
-							send_data = data_packing_toPC(Server_return_login, "200", 
-													buf_json.crc_data, (const unsigned char *)&(buf_json._json), sizeof(buf_json._json));
-													
-							if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
-									perror("PC_logout_sendto");						
+							send_data = data_packing_toPC(Server_return_logout, "200");					
 					}
 					else{
-							send_data = data_packing_toPC(Server_return_login, "406", 
-													buf_json.crc_data, (const unsigned char *)&(buf_json._json), sizeof(buf_json._json));
-													
-							if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
-									perror("PC_logout_sendto");						
+							send_data = data_packing_toPC(Server_return_logout, "406");				
 					}		
+					
+					if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
+							perror("PC_logout_sendto");	
 					break;
 					
 				//获取设备信息
 				case PC_device_list:
 					if(login_status){
+						vdata_list.clear();
 						//接收获取设备信息的命令，执行node_list
 						node_list(argc, argv);
 
+						send_data = data_packing_toPC(Server_return_device_list, "200");
 						//返回数据给PC端软件
-						if(sendto(fd_udp, &reply_list, sizeof(reply_list), 0, (struct sockaddr *)&srvaddr, len) < 0)
+						if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
 								perror("PC_device_list_sendto");	
 					}
 					break;
 
 				//更新设备
 				case PC_update_device:
-					if(login_status){
+					if(login_status && !vdata_list.empty()){
 						
 					}
 					break;
 				//取消更新
 				case PC_cancel_update:
-					if(login_status){
+					if(login_status && !vdata_list.empty()){
 					
 					}
 					break;
 				//固件上传
 				case PC_firmware_upload:	
-					if(login_status){
-					
+					if(login_status && !vdata_list.empty()){
+						send_data = data_packing_toPC(Server_return_upload, "200");
+
+						if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
+								perror("PC_device_list_sendto");
+								
+						do_get(fd_udp, (struct sockaddr *)&srvaddr, &len, AST_FILE_NAME);		
 					}
 					break;
 				//触发灯操作
 				case PC_redled_blink_trigger:
-					if(login_status){
-					
+					if(login_status && !vdata_list.empty()){
+						send_data = data_packing_toPC(Server_return_redled_reply, "200");	
+						if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
+							perror("PC_redled_blink_sendto");
 					}
 					break;
 			}
