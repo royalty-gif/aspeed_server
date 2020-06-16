@@ -48,43 +48,15 @@ unsigned short crc16_ccitt(const unsigned char *buf, int len)
 	return crc;
 }
  
-int check(int crc, const unsigned char *buf, int sz)
+int check(unsigned short crc, const unsigned char *buf, int sz)
 {
-	if (crc)
-	{
-		unsigned short crc = crc16_ccitt(buf, sz);
-		unsigned short tcrc = (buf[sz]<<8)+buf[sz+1];
-		
-		if (crc == tcrc)
-			return 1;
-	}
+
+	unsigned short tcrc = crc16_ccitt(buf, sz);
+	
+	if (crc == tcrc)
+		return 1;
 	else
-	{
-		int i;
-		unsigned char cks = 0;
-		
-		for (i = sz; i != 0; i--)
-		{
-			cks += *(buf++);
-		}
-		
-		if (cks == *buf)
-		      return 1;
-	}
-	return 0;
+		return 0;
 }
-/*
-int main()  {
-	unsigned char data[1024];
-	unsigned char* buffer = data;
-	FILE* fp = fopen("TS-9404CON-PJ-STM32F103VCT6.bin", "rb");
-	fread(buffer,1,1024,fp);
-	fclose(fp);
-	//int i;
-	//for(i = 0; i < 1024; i++)
-	//data[i] = 0xA5;
-	unsigned short result = crc16_ccitt(data, 1024);
-	printf("result: %x", result);
-}
-*/
+
 

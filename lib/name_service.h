@@ -13,6 +13,7 @@
 #define AST_CONNECT_PORT "50010"
 #define AST_NAME_SERVICE_QUERY_PORT 3333
 #define AST_NAME_SERVICE_REPLY_PORT 3334
+#define AST_JSON_MAX_SIZE 1024
 #define AST_SERVER_UASE_NAME "aspeed"
 #define AST_SERVER_PASSWORD "123456"
 #define AST_FILE_NAME (char *)"file.tar.gz"
@@ -98,6 +99,8 @@ typedef enum _Server_todev_ActionCode_
 	Server_get_md5value = 5200,
 	Server_start_file_tran,
 	Server_update_device,
+	Server_write_md5Value,
+	Server_trigger_redled,
 }Server_todev_ActionCode;
 
 /************接收出错的操作码***************/
@@ -168,7 +171,8 @@ typedef struct _json_res_struct_
 {
 	int user_actioncode;
 	string device_name;
-	string result;
+	int result;
+	string return_message;
 	string data_log;
 	int msg_id;
 } json_res_struct,*pjson_res_struct;

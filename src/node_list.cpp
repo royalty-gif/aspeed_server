@@ -30,10 +30,13 @@
 #include <ctime>
 
 using namespace std;
+using namespace rapidjson;
 
 
 //创建一个容器收集设备信息
 vector<string> vdata_list;
+
+static string tmp_data;
 
 #if 0
 static void signal_handler(int i)
@@ -359,12 +362,13 @@ void node_list(int argc, char *argv[])
 
 /***************JSON解析***********************/
 
-PC_data_struct parse_json(string jsondata) {
+PC_data_struct parse_json(char *jsondata) {
 	PC_data_struct ret;
 	
 	//创建解析对象进行解析
-	rapidjson::Document doc;
-	if(!doc.Parse(jsondata.data()).HasParseError())
+	Document doc;
+	if(!doc.Parse(jsondata).HasParseError())
+	
 	{
 	
 		//json格式内容
@@ -396,20 +400,11 @@ PC_data_struct parse_json(string jsondata) {
 				ret._json.msg_id = object["msg_id"].GetInt();
 			}
 		}
-		//crc校验码
-		if(doc.HasMember("crc_data"))
-		{
-			ret.crc_data = doc["crc_data"].GetInt();
-		}
-		//结束符0xFF
-		if(doc.HasMember("end_mark"))
-		{
-			ret.end_mark = *doc["end_mark"].GetString();
-		}
 	}
 
 	return ret;
 }
+
 
 /***************分割string字符串函数***********************/
 
@@ -455,76 +450,124 @@ int message_timeid(void)
 	return (temp_id * 10 + time_count);
 }
 
-/************封装函数响应PC*************
+/************json封装函数响应PC*************
 user_actioncode：命令码
 result：返回的结果（成功: 200; 失败: 406）
 
-返回：封装好的可以直接发给PC的数据包
+返回：无返回，直接用tmp_data
 
-***************************************/
+*******************************************/
 
-PC_resdata_struct data_packing_toPC(int user_actioncode, string result)
+void data_packing_toPC(PC_data_struct *pc_data, int user_actioncode, int result)
 {
-	PC_resdata_struct data_package; 	
+
+	PC_resdata_struct data_package; 
+	string data_log;
+	Document doc;
+	unsigned short crc_data = 0;
+	Value s;
+		
 	memset(&data_package, 0, sizeof(data_package));
+	tmp_data.clear();
+	data_log.clear();
+	s.SetString("");
 	
-	data_package._json.user_actioncode = user_actioncode;
-	data_package._json.device_name = "KVM_SERVER_9500";
-	data_package._json.msg_id = message_timeid();
-	switch(user_actioncode)  //封装data_log
+	doc.SetObject();
+	Document::AllocatorType &allocator = doc.GetAllocator();  //获取分配器
+	
+	doc.AddMember("actioncode", user_actioncode, allocator);
+	doc.AddMember("device_name", "KVM_SERVER_9500", allocator);
+	switch(user_actioncode)  
 	{
 		case Server_return_login:
-			if(result == "200")
+			if(result == 200)
 			{
-				data_package._json.result = "200";
-				data_package._json.data_log = "success";
+				doc.AddMember("result", 200, allocator);
+				doc.AddMember("return_message", "pc login status message", allocator);
+				doc.AddMember("data", "success", allocator);
 			}
-			else if(result == "406")
+			else if(result == 406)
 			{
-				data_package._json.result = "406";
-				data_package._json.data_log = "failed";
+				doc.AddMember("result", 406, allocator);
+				doc.AddMember("return_message", "pc login status message", allocator);
+				doc.AddMember("data", "failed", allocator);
 			}
 			break;
 			
 		case Server_return_logout:
-			if(result == "200")
+			if(result == 200)
 			{
-				data_package._json.result = "200";
-				data_package._json.data_log = "success";
+				doc.AddMember("result", 200, allocator);
+				doc.AddMember("return_message", "pc logout status message", allocator);
+				doc.AddMember("data", "success", allocator);
 			}
-			else if(result == "406")
+			else if(result == 406)
 			{
-				data_package._json.result = "406";
-				data_package._json.data_log = "failed";
+				doc.AddMember("result", 406, allocator);
+				doc.AddMember("return_message", "pc logout status message", allocator);
+				doc.AddMember("data", "failed", allocator);
 			}
 			break;
 			
 		case Server_return_device_list:
-			data_package._json.result = "200";
+			doc.AddMember("result", 200, allocator);
+			doc.AddMember("return_message", "device list", allocator);
 			for(int i = 0; i<vdata_list.size(); i++)
 			{
-				data_package._json.data_log += vdata_list[i];
+				data_log += vdata_list[i];
 			}
-			data_package._json.data_log += '\0';
+			data_log += '\0';
+			s = StringRef(data_log.c_str());
+			doc.AddMember("data", s, allocator);
+			break;
+		
+		case Server_return_upload:
+			doc.AddMember("result", 200, allocator);
+			doc.AddMember("return_message", "firmware upload start", allocator);
+			doc.AddMember("data", "", allocator);
 			break;
 			
 		case Server_return_update:
+			doc.AddMember("result", 200, allocator);
+			doc.AddMember("return_message", "device update start", allocator);
 			
+			data_log = pc_data->_json.data_log;
+			s = StringRef(data_log.c_str());
+			doc.AddMember("data", s, allocator);
 			break;
 			
 		case Server_return_cancel_update:
+			doc.AddMember("result", 200, allocator);
+			doc.AddMember("return_message", "device update cancel", allocator);
+			
+			data_log = pc_data->_json.data_log;
+			s = StringRef(data_log.c_str());
+			doc.AddMember("data", s, allocator);
 			break;
 			
 		case Server_return_redled_reply:
+			doc.AddMember("result", 200, allocator);
+			doc.AddMember("return_message", "blink start/stop", allocator);
+			
+			data_log = pc_data->_json.data_log;
+			s = StringRef(data_log.c_str());
+			doc.AddMember("data", s, allocator);
 			break;
 	}
+	doc.AddMember("msg_id", message_timeid(), allocator);
 	
+	StringBuffer buffer;
+	Writer<StringBuffer> writer(buffer);
+	doc.Accept(writer);
+	
+	tmp_data = buffer.GetString();
 	//添加crc字段
-	data_package.crc_data =crc16_ccitt((const unsigned char *)&data_package, sizeof(data_package));
+	crc_data =crc16_ccitt((const unsigned char *)tmp_data.data(), tmp_data.length());
+	tmp_data += (crc_data >> 8);
+	tmp_data += (crc_data & 0x00FF);
 	//添加结束符OxFF
-	data_package.end_mark = 0xFF;
-	
-	return data_package;
+	tmp_data += 0xFF;
+
 }
 
 /************获取文件*************/
@@ -534,7 +577,6 @@ void do_get(int fd_udp, struct sockaddr *sender, socklen_t *len, char *local_fil
 
 	struct Transfer_packet tran_packet;
 	int r_size = 0;
-	PC_resdata_struct send_error_data;
 	
 	memset(&tran_packet, 0, sizeof(tran_packet));
 	FILE *fp = fopen(local_file, "w");
@@ -548,8 +590,8 @@ void do_get(int fd_udp, struct sockaddr *sender, socklen_t *len, char *local_fil
 		
 		if(r_size > 0 && r_size < 7){
 			perror("do_get:");
-			send_error_data = data_packing_toPC(Server_return_login, "404");
-			sendto(fd_udp, &send_error_data, sizeof(send_error_data), 0, sender, *len);
+			data_packing_toPC(NULL, Server_return_upload, 404);
+			sendto(fd_udp, tmp_data.data(), tmp_data.length(), 0, sender, *len);
 		}
 		else{
 			fwrite(tran_packet.data, 1, r_size - 7, fp);
@@ -575,12 +617,13 @@ int main(int argc, char *argv[])
 	// 创建一个UDP套接字
 	int fd_udp = Socket(AF_INET, SOCK_DGRAM, 0);
 
-	//创建一个接收/发送信息的节点
+	//创建一个接收信息的节点
 	PC_data_struct buf_json ;
-	PC_resdata_struct send_data;
-	string recv_json;
+
+	char recv_json[AST_JSON_MAX_SIZE];
+	char *parse_json_data;
 	int buf_len = 0,login_status = 0;
-	
+	unsigned short crc = 0;
 	//md5检验储存
 	char md5_str[MD5_STR_LEN + 1];
 	
@@ -602,20 +645,29 @@ int main(int argc, char *argv[])
 	while(1)
 	{
 		memset(&buf_json, 0, sizeof(buf_json));
-		memset(&send_data, 0, sizeof(send_data));
+		memset(recv_json, 0, sizeof(recv_json));
 		memset(md5_str, 0, MD5_STR_LEN + 1);
 		v.clear();
-		buf_len = recvfrom(fd_udp, &recv_json, sizeof(recv_json), 0, (struct sockaddr *)&srvaddr, &len);
+		
+		buf_len = recvfrom(fd_udp, recv_json, sizeof(recv_json), 0, (struct sockaddr *)&srvaddr, &len);
 		if(buf_len > 0)
 		{
-			buf_json = parse_json(recv_json);
-			
-			if(buf_json.end_mark != 0xFF && check(buf_json.crc_data, (const unsigned char *)&buf_json._json, sizeof(buf_json._json)))
+			parse_json_data = (char *)malloc(buf_len-3);
+			strncpy(parse_json_data, recv_json, buf_len-3);
+			buf_json = parse_json(parse_json_data);
+			crc = (recv_json[buf_len - 3]<<8)+recv_json[buf_len - 2];
+			if(recv_json[buf_len - 1] != 0xFF );
 			{
-				perror("end_mark or check crc");
-				send_data = data_packing_toPC(Server_return_login, "404");
-				if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
-					perror("PC_login_sendto");
+				perror("end_mark");
+				data_packing_toPC(NULL, Server_return_login, 404);
+				sendto(fd_udp, tmp_data.data(), tmp_data.length(), 0, (struct sockaddr *)&srvaddr, len);
+				continue;
+			}
+			if(!check(crc, (const unsigned char *)parse_json_data, buf_len-3))
+			{
+				perror("crc check!");
+				data_packing_toPC(NULL, Server_return_login, 401);
+				sendto(fd_udp, tmp_data.data(), tmp_data.length(), 0, (struct sockaddr *)&srvaddr, len);
 				continue;
 			}
 			SplitString(buf_json._json.data_log, v, ","); //按逗号来分割字符串
@@ -627,14 +679,12 @@ int main(int argc, char *argv[])
 					
 					if((AST_SERVER_UASE_NAME == v[0])  && (v[1] == md5_str)){
 							login_status = 1;
-							send_data =data_packing_toPC(Server_return_login, "200");											
+							data_packing_toPC(NULL, Server_return_login, 200);											
 					}
 					else{
-							send_data = data_packing_toPC(Server_return_login, "406");				
+							data_packing_toPC(NULL, Server_return_login, 406);				
 					}	
-					
-					if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
-							perror("PC_login_sendto");	
+					sendto(fd_udp, tmp_data.data(), tmp_data.length(), 0, (struct sockaddr *)&srvaddr, len);
 					break;
 					
 				//注销登录
@@ -644,14 +694,13 @@ int main(int argc, char *argv[])
 					if((AST_SERVER_UASE_NAME == v[0])  && (v[1] == md5_str))
 					{
 							login_status = 0;
-							send_data = data_packing_toPC(Server_return_logout, "200");					
+							data_packing_toPC(NULL, Server_return_logout, 200);					
 					}
 					else{
-							send_data = data_packing_toPC(Server_return_logout, "406");				
+							data_packing_toPC(NULL, Server_return_logout, 406);				
 					}		
 					
-					if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
-							perror("PC_logout_sendto");	
+					sendto(fd_udp, tmp_data.data(), tmp_data.length(), 0, (struct sockaddr *)&srvaddr, len);
 					break;
 					
 				//获取设备信息
@@ -661,10 +710,9 @@ int main(int argc, char *argv[])
 						//接收获取设备信息的命令，执行node_list
 						node_list(argc, argv);
 
-						send_data = data_packing_toPC(Server_return_device_list, "200");
+						data_packing_toPC(NULL, Server_return_device_list, 200);
 						//返回数据给PC端软件
-						if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
-								perror("PC_device_list_sendto");	
+						sendto(fd_udp, tmp_data.data(), tmp_data.length(), 0, (struct sockaddr *)&srvaddr, len);
 					}
 					break;
 
@@ -683,24 +731,31 @@ int main(int argc, char *argv[])
 				//固件上传
 				case PC_firmware_upload:	
 					if(login_status && !vdata_list.empty()){
-						send_data = data_packing_toPC(Server_return_upload, "200");
+						data_packing_toPC(&buf_json, Server_return_upload, 200);
 
-						if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
-								perror("PC_device_list_sendto");
+						sendto(fd_udp, tmp_data.data(), tmp_data.length(), 0, (struct sockaddr *)&srvaddr, len);
 								
-						do_get(fd_udp, (struct sockaddr *)&srvaddr, &len, AST_FILE_NAME);		
+						do_get(fd_udp, (struct sockaddr *)&srvaddr, &len, AST_FILE_NAME);
+						
+						//检验文件MD5
+						
+						//向设备获取MD5值
+						
+						//比较后一致，不升级，反之发送指令升级		
 					}
 					break;
 				//触发灯操作
 				case PC_redled_blink_trigger:
 					if(login_status && !vdata_list.empty()){
-						send_data = data_packing_toPC(Server_return_redled_reply, "200");	
-						if(sendto(fd_udp, &send_data, sizeof(send_data), 0, (struct sockaddr *)&srvaddr, len) < 0)
-							perror("PC_redled_blink_sendto");
+						data_packing_toPC(&buf_json, Server_return_redled_reply, 200);	
+						sendto(fd_udp, tmp_data.data(), tmp_data.length(), 0, (struct sockaddr *)&srvaddr, len);
 					}
 					break;
 			}
+			
+			free(parse_json_data);
 		}
+		
 	}
 
 	close(fd_udp);
