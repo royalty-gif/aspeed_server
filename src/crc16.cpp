@@ -52,7 +52,6 @@ int check(unsigned short crc, const unsigned char *buf, int sz)
 {
 
 	unsigned short tcrc = crc16_ccitt(buf, sz);
-	
 	if (crc == tcrc)
 		return 1;
 	else

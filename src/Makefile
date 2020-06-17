@@ -1,6 +1,6 @@
 
 cc=g++
-cflags=-O3 -g
+cflags=-g
 ldflags=-g 
 CFLAGS=-I ../lib/
 OBJ = node_list.o astnetwork.o wrap.o crc16.o md5.o

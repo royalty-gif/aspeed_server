@@ -139,50 +139,6 @@ typedef struct _reply_struct_
 	char device_version[MAX_VERSION_LENGTH];
 }reply_struct, *preply_struct;
 
-/*****************************************
-
- PC发送（服务器接收）结构体
- 格式：数据包格式：json + crc + OxFF
-
-*****************************************/
-typedef struct _json_struct_
-{
-	int user_actioncode;
-	string device_name;
-	string data_log;
-	int msg_id;
-} json_struct,*pjson_struct;
-
-typedef struct _PC_data_struct_
-{
-	json_struct _json;
-	short int crc_data;
-	char end_mark;
-}PC_data_struct, *pPC_data_struct;
-
-/*****************************************
-
- PC接收（服务器响应发送）结构体
- 格式：数据包格式：json + crc + OxFF
-
-*****************************************/
-
-typedef struct _json_res_struct_
-{
-	int user_actioncode;
-	string device_name;
-	int result;
-	string return_message;
-	string data_log;
-	int msg_id;
-} json_res_struct,*pjson_res_struct;
-
-typedef struct _PC_resdata_struct_
-{
-	json_res_struct _json;
-	short int crc_data;
-	char end_mark;
-}PC_resdata_struct, *pPC_resdata_struct;
 
 //AST_Device_Status device_status = Status_Unknown;
 #define AST_NAME_SERVICE_GROUP_ADDR "225.1.0.0";
