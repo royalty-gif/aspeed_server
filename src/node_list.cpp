@@ -41,27 +41,26 @@ vector<string> vdata_list;
 vector<string> m_vpcdata;
 vector<int> m_vpccode,m_vpcid;
 
+//创建收集设备响应信息的容器
+vector<string> m_vdevdata;
+vector<int> m_vdevcode,m_vdevid,m_vdevres;
+
 //发送给PC的json变量
 static string m_sdata2PC;
 
-#if 0
-static void signal_handler(int i)
-{
-	dbg("signal catched, code %d", i);
-}
+//发送/接收设备的json变量
+static string m_sdata2dev;
+static string m_sdata_rcv;
 
-static void set_signal(void)
-{
-	struct sigaction act;
+//服务器与PC UDP连接的变量
+static int fd_udp, on=1;
+static struct sockaddr_in srvaddr;
+static socklen_t len = sizeof(srvaddr);
 
-	bzero(&act, sizeof(act));
-	act.sa_handler = signal_handler;
-	sigemptyset(&act.sa_mask);
-	sigaction(SIGTERM, &act, NULL);
-	sigaction(SIGINT, &act, NULL);
-}
-#endif
-
+//服务器与设备 UDP连接的变量
+static int q_fd, r_fd;
+struct sockaddr_in dev_addr;
+static socklen_t devaddr_len = sizeof(dev_addr);
 /*********设备信息结构体处理***********
 顺序：
 	device_name
@@ -94,12 +93,10 @@ void _device_msg_deal(reply_struct * _reply, vector<string>& _vdata_deal, char *
 #define WAIT_REPLY_TIMEOUT 3
 void do_query(AST_Device_Type device_type, AST_Device_Function device_function)
 {
-	int q_fd, r_fd;
 	struct timeval timeout;
 	int ret = -1;
 	fd_set	fds;
-	struct sockaddr_in addr;
-	socklen_t addr_len = sizeof(addr);
+	
 	query_struct query;
 	reply_struct reply;
 	
@@ -115,13 +112,13 @@ void do_query(AST_Device_Type device_type, AST_Device_Function device_function)
 		exit(EXIT_FAILURE);
 	}
 	//send out query
-	memset(&addr, 0, sizeof(addr));
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = inet_addr(grp_addr);
-	addr.sin_port = htons(AST_NAME_SERVICE_QUERY_PORT);
+	memset(&dev_addr, 0, sizeof(dev_addr));
+	dev_addr.sin_family = AF_INET;
+	dev_addr.sin_addr.s_addr = inet_addr(grp_addr);
+	dev_addr.sin_port = htons(AST_NAME_SERVICE_QUERY_PORT);
 	query.device_type = device_type;
 	query.device_function = device_function;
-	sendto(q_fd, &query, sizeof(query), 0, (struct sockaddr *)&addr, addr_len);
+	sendto(q_fd, &query, sizeof(query), 0, (struct sockaddr *)&dev_addr, devaddr_len);
 	FD_ZERO(&fds);
 	FD_SET(r_fd, &fds);
 	//receive until timeout & prepare list
@@ -132,7 +129,7 @@ void do_query(AST_Device_Type device_type, AST_Device_Function device_function)
 	while (select(r_fd + 1, &fds, NULL, NULL, &timeout) > 0)
 	{
 		reply.device_mac[0] = '\0'; //fix rechive empty bug
-		ret = recvfrom(r_fd, &reply, sizeof(reply), 0, (struct sockaddr *)&addr, &addr_len);
+		ret = recvfrom(r_fd, &reply, sizeof(reply), 0, (struct sockaddr *)&dev_addr, &devaddr_len);
 		if (ret == -1) {
 			err("recvfrom error (%d)\n", errno);
 			close(r_fd);
@@ -143,8 +140,8 @@ void do_query(AST_Device_Type device_type, AST_Device_Function device_function)
 			break;
 		} else {
 		
-			_device_msg_deal(&reply, vdata_list, inet_ntoa(addr.sin_addr));
-			info("%s\t", inet_ntoa(addr.sin_addr));
+			_device_msg_deal(&reply, vdata_list, inet_ntoa(dev_addr.sin_addr));
+			info("%s\t", inet_ntoa(dev_addr.sin_addr));
 			info("%s\t", reply.device_name);
 #if 0
 			dbg("device_type = %d\n", reply.device_type);
@@ -203,12 +200,10 @@ void do_query(AST_Device_Type device_type, AST_Device_Function device_function)
 
 static void do_query_json(AST_Device_Type device_type, AST_Device_Function device_function)
 {
-	int q_fd, r_fd;
 	struct timeval timeout;
 	int ret = -1;
 	fd_set	fds;
-	struct sockaddr_in addr;
-	socklen_t addr_len = sizeof(addr);
+	
 	query_struct query;
 	reply_struct reply;
 	char grp_addr[] = AST_NAME_SERVICE_GROUP_ADDR;
@@ -224,13 +219,13 @@ static void do_query_json(AST_Device_Type device_type, AST_Device_Function devic
 		exit(EXIT_FAILURE);
 	}
 	//send out query
-	memset(&addr, 0, sizeof(addr));
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = inet_addr(grp_addr);
-	addr.sin_port = htons(AST_NAME_SERVICE_QUERY_PORT);
+	memset(&dev_addr, 0, sizeof(dev_addr));
+	dev_addr.sin_family = AF_INET;
+	dev_addr.sin_addr.s_addr = inet_addr(grp_addr);
+	dev_addr.sin_port = htons(AST_NAME_SERVICE_QUERY_PORT);
 	query.device_type = device_type;
 	query.device_function = device_function;
-	sendto(q_fd, &query, sizeof(query), 0, (struct sockaddr *)&addr, addr_len);
+	sendto(q_fd, &query, sizeof(query), 0, (struct sockaddr *)&dev_addr, devaddr_len);
 	FD_ZERO(&fds);
 	FD_SET(r_fd, &fds);
 	//receive until timeout & prepare list
@@ -240,7 +235,7 @@ static void do_query_json(AST_Device_Type device_type, AST_Device_Function devic
 	while (select(r_fd + 1, &fds, NULL, NULL, &timeout) > 0)
 	{
 		reply.device_mac[0] = '\0';  //fix rechive empty bug
-		ret = recvfrom(r_fd, &reply, sizeof(reply), 0, (struct sockaddr *)&addr, &addr_len);
+		ret = recvfrom(r_fd, &reply, sizeof(reply), 0, (struct sockaddr *)&dev_addr, &devaddr_len);
 		if (ret == -1) {
 			err("recvfrom error (%d)\n", errno);
 			close(r_fd);
@@ -255,11 +250,11 @@ static void do_query_json(AST_Device_Type device_type, AST_Device_Function devic
 			}
 			node_cnt++;
 			
-			_device_msg_deal(&reply, vdata_list, inet_ntoa(addr.sin_addr));
+			_device_msg_deal(&reply, vdata_list, inet_ntoa(dev_addr.sin_addr));
 			// item name: == ip
 			info("\"%s\":\n{\n", reply.device_name);
 			// Start of data
-			info("\t\"ip\":\"%s\",\n", inet_ntoa(addr.sin_addr));
+			info("\t\"ip\":\"%s\",\n", inet_ntoa(dev_addr.sin_addr));
 			info("\t\"host_name\":\"%s\",\n", reply.device_name);
 			info("\t\"status\":\"%s\",\n", reply.device_status);
 			if (strlen(reply.device_mac) > 0) { 
@@ -366,7 +361,7 @@ void node_list(int argc, char *argv[])
 	}
 }
 
-/***************JSON解析***********************/
+/***************对PC数据进行JSON解析*********************/
 
 void parse_json(char *jsondata) {
 	
@@ -396,6 +391,40 @@ void parse_json(char *jsondata) {
 		}
 }
 
+/***************对设备返回数据进行JSON解析*********************/
+void devparse_json(char *jsondata) {
+	
+		//创建解析对象进行解析
+		Document doc;
+		int tmp;
+		
+		if(!doc.Parse(jsondata).HasParseError())
+		{
+			//提取命令码
+			if(doc.HasMember("actioncode"))
+			{
+				m_vdevcode.push_back(doc["actioncode"].GetInt());
+			}
+				
+			//提取result
+			if(doc.HasMember("result"))
+			{
+				m_vdevres.push_back(doc["result"].GetInt());
+			}	
+			
+			//提取数据信息
+			if(doc.HasMember("data"))
+			{
+				m_vdevdata.push_back(doc["data"].GetString());
+			}
+			
+			//提取信息id
+			if(doc.HasMember("msg_id"))
+			{
+				m_vdevid.push_back(doc["msg_id"].GetInt());
+			}		
+		}
+}
 
 /***************分割string字符串函数***********************/
 
@@ -442,13 +471,56 @@ int message_timeid(void)
 	return (temp_id + time_count);
 }
 
-/************json封装函数响应PC*************
+/************json封装函数响应设备*************
+Srv_actioncode：命令码
+data：携带的数据
+msg_id： 五位id号
+
+返回：无返回，直接用m_sdata2dev
+
+*******************************************/
+void data_packing_todev(int Srv_actioncode, string data, int msg_id)
+{
+	Document doc;
+	unsigned short crc_data = 0;
+	Value s;
+	
+	m_sdata2dev.clear();
+	s.SetString("");
+	
+	doc.SetObject();
+	Document::AllocatorType &allocator = doc.GetAllocator();  //获取分配器
+	
+	doc.AddMember("actioncode", Srv_actioncode, allocator);
+	doc.AddMember("device_name", "KVM_SERVER_9500", allocator);
+	
+	s = StringRef(data.c_str());
+	doc.AddMember("data", s, allocator);   //需要将字符串另外处理，不然出问题
+	doc.AddMember("msg_id", msg_id, allocator);
+	
+	StringBuffer buffer;
+	Writer<StringBuffer> writer(buffer);
+	doc.Accept(writer);
+	
+	m_sdata2dev = buffer.GetString();
+	//添加crc字段
+	crc_data =crc16_ccitt((const unsigned char *)m_sdata2dev.data(), m_sdata2dev.length());
+	m_sdata2dev += (crc_data >> 8);
+	m_sdata2dev += (crc_data & 0x00FF);
+	//添加结束符OxFF
+	m_sdata2dev += 0xFF;
+	
+}
+
+/************json封装函数发送给PC**************
+pc_data :PC发送过来的data数据
 user_actioncode：命令码
 result：返回的结果（成功: 200; 失败: 406）
+msg_id： 五位id号
 
 返回：无返回，直接用m_sdata2PC
 
-*******************************************/
+***********************************************/
 
 void data_packing_toPC(string pc_data, int user_actioncode, int result, int msg_id)
 {
@@ -506,7 +578,7 @@ void data_packing_toPC(string pc_data, int user_actioncode, int result, int msg_
 				data_log += vdata_list[i];
 			}
 			data_log += '\0';
-			s = StringRef(data_log.c_str());
+			s = StringRef(data_log.c_str());   //需要将字符串另外处理，不然出问题
 			doc.AddMember("data", s, allocator);
 			break;
 		
@@ -589,10 +661,44 @@ void do_get(int fd_udp, struct sockaddr *sender, socklen_t *len, char *local_fil
 
 /***********等待取消指令的线程****************/
 
-/*void *routine(void *arg)
+void catch_sig(int sig)
 {
+	int sig_len,ret;
+	char sig_json[512];
+	char *sig_parse;
 	
-}*/
+	printf("catch_sig\n");
+	while(1)
+	{
+		memset(sig_json, 0, 512);
+		m_vpccode.clear();
+		m_vpcid.clear();
+		m_vpcdata.clear();	
+		sig_len = recvfrom(fd_udp, sig_json, sizeof(sig_json), 0, (struct sockaddr *)&srvaddr, &len);	
+
+		printf("sig_len:%d\n",sig_len);
+	
+		sig_parse = (char *)malloc(sig_len);
+		memset(sig_parse, 0, sig_len);
+		strncpy(sig_parse, sig_json, sig_len-3);
+		parse_json(sig_parse);
+		
+		if(m_vpccode[0] == PC_cancel_update)
+		{
+			on = 0;
+			ret = ioctl(fd_udp, FIOASYNC, &on);  //工作在异步模式
+			if(ret < 0)
+			{
+				perror("ioctl error\n");
+				exit(-1);
+			}
+			break;
+		}
+		else
+			continue;
+	}
+	free(sig_parse);
+}
 
 int main(int argc, char *argv[])
 {
@@ -605,9 +711,9 @@ int main(int argc, char *argv[])
 	3. 通过自定义的数据包命令码执行不同操作
 
 	*/
-
+	int ret = -1;
 	// 创建一个UDP套接字
-	int fd_udp = Socket(AF_INET, SOCK_DGRAM, 0);
+	fd_udp = Socket(AF_INET, SOCK_DGRAM, 0);
 
 	char recv_json[512];
 	char *parse_json_data;
@@ -620,8 +726,6 @@ int main(int argc, char *argv[])
 	vector<string> v_Splitstr;
 
 	// 绑定地址（IP:PORT）
-	struct sockaddr_in srvaddr;
-	socklen_t len = sizeof(srvaddr);
 	bzero(&srvaddr, len);
 
 	srvaddr.sin_family = AF_INET;
@@ -631,7 +735,15 @@ int main(int argc, char *argv[])
 	//绑定本地IP和端口
 	Bind(fd_udp, (struct sockaddr *)&srvaddr, len);
 
-
+	//信号相关操作
+	signal(SIGIO, catch_sig);   //注册信号
+	ret = fcntl(fd_udp, F_SETOWN, getpid()); //设置SIGIO的属主
+	if(ret < 0)  
+	{
+		perror("fcntl error!\n");
+		exit(-1);
+	}
+	
 	while(1)
 	{
 		memset(recv_json, 0, sizeof(recv_json));
@@ -645,6 +757,7 @@ int main(int argc, char *argv[])
 		
 		buf_len = recvfrom(fd_udp, recv_json, sizeof(recv_json), 0, (struct sockaddr *)&srvaddr, &len);		
 		printf("*********************************\n");
+		printf("recv_json:%s\n",recv_json);
 		if(buf_len > 0)
 		{
 			printf("buf_len:%d\n",buf_len);
@@ -675,11 +788,12 @@ int main(int argc, char *argv[])
 				case  PC_login:
 					if((AST_SERVER_UASE_NAME == v_Splitstr[0])  && (v_Splitstr[1] == AST_SERVER_PASSWORD)){
 							login_status = 1;
-							data_packing_toPC("", Server_return_login, 200, m_vpcid[0]);											
+							data_packing_toPC("", Server_return_login, 200, m_vpcid[0]);										
 					}
 					else{
 							data_packing_toPC("", Server_return_login, 406, m_vpcid[0]);					
 					}	
+					printf("m_sdata2PC.data():%s\n",m_sdata2PC.data());
 					sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
 					break;
 					
@@ -714,18 +828,33 @@ int main(int argc, char *argv[])
 
 				//更新设备
 				case PC_update_device:
+				
 					if(login_status && !vdata_list.empty()){
-					
-						//创建一条线程，持续监听取消升级的指令
-						pthread_t tid;
-					//	pthread_create(&tid, NULL, routine, (void *)fd_udp);
+						ret = ioctl(fd_udp, FIOASYNC, &on);  //工作在异步模式
+						if(ret < 0)
+						{
+							perror("ioctl error\n");
+							exit(-1);
+						}
 						
-						
-						//检验文件MD5
-						
-						//向设备获取MD5值
-						
-						//比较后一致，不升级，反之发送指令升级	
+						while(on)
+						{
+							//检验文件MD5
+							ret = Compute_file_md5(AST_FILE_NAME, md5_str);
+							if (0 == ret)
+							{
+								printf("[file - %s] md5 value:\n", AST_FILE_NAME);
+								printf("%s\n", md5_str);
+							}
+							//向设备获取MD5值
+							data_packing_todev(Server_get_md5value, (const char *)"", message_timeid());
+							sendto(q_fd, &m_sdata2dev, sizeof(m_sdata2dev), 0, (struct sockaddr *)&dev_addr, devaddr_len);
+							
+							//等待接收
+							recvfrom(r_fd, &m_sdata_rcv, sizeof(m_sdata_rcv), 0, (struct sockaddr *)&dev_addr, &devaddr_len);
+							//devparse_json();
+							//比较后一致，不升级，反之发送指令升级
+						}	
 					}
 					break;
 				//取消更新

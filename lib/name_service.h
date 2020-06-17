@@ -103,6 +103,19 @@ typedef enum _Server_todev_ActionCode_
 	Server_trigger_redled,
 }Server_todev_ActionCode;
 
+/************设备对服务器的响应操作码***************/
+
+typedef enum _Dev_toSrv_ActionCode_
+{
+	Dev_reply_md5Value = 5300,
+	Dev_ready_filercv,
+	Dev_update_start,
+	Dev_update_end,
+	Dev_reply_wmd5Value,
+	Dev_online,
+	Dev_blink_redled_done,
+}Dev_toSrv_ActionCode;
+
 /************接收出错的操作码***************/
 
 typedef enum _Res_error_ActionCode_
