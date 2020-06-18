@@ -781,14 +781,14 @@ int main(int argc, char *argv[])
 			if(0xff != (unsigned char)recv_json[buf_len - 1])
 			{
 				perror("end_mark");
-				data_packing_toPC("", Server_return_login, 404, m_vpcid[0]);
+				data_packing_toPC("", m_vpccode[0], 404, m_vpcid[0]);
 				sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
 				continue;
 			}
 			if(!check(crc, (const unsigned char *)parse_json_data, buf_len-3))
 			{
 				perror("crc check!");
-				data_packing_toPC("", Server_return_login, 401, m_vpcid[0]);
+				data_packing_toPC("", m_vpccode[0], 401, m_vpcid[0]);
 				sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
 				continue;
 			}
