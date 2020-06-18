@@ -154,6 +154,6 @@ typedef struct _reply_struct_
 
 
 //AST_Device_Status device_status = Status_Unknown;
-#define AST_NAME_SERVICE_GROUP_ADDR "225.1.0.0";
+#define AST_NAME_SERVICE_GROUP_ADDR "169.254.255.255";
 
 #endif

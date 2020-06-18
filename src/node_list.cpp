@@ -74,9 +74,13 @@ static socklen_t devaddr_len = sizeof(dev_addr);
 void _device_msg_deal(reply_struct * _reply, vector<string>& _vdata_deal, char *ip_addr)
 {
 	_vdata_deal.push_back(_reply->device_name);
+	_vdata_deal.push_back(",");
 	_vdata_deal.push_back(_reply->device_version);
+	_vdata_deal.push_back(",");
 	_vdata_deal.push_back(_reply->device_mac);
+	_vdata_deal.push_back(",");
 	_vdata_deal.push_back(ip_addr);
+	_vdata_deal.push_back(",");
 
 	if(_reply->device_type == Type_Host)
 		_vdata_deal.push_back("TX");
@@ -126,10 +130,12 @@ void do_query(AST_Device_Type device_type, AST_Device_Function device_function)
 	timeout.tv_sec = WAIT_REPLY_TIMEOUT;
 	info("IP\tHostname\tStatus\n");
 	info(">>>>>\n");
+	
 	while (select(r_fd + 1, &fds, NULL, NULL, &timeout) > 0)
 	{
 		reply.device_mac[0] = '\0'; //fix rechive empty bug
 		ret = recvfrom(r_fd, &reply, sizeof(reply), 0, (struct sockaddr *)&dev_addr, &devaddr_len);
+		printf("ret：%d\n",ret);
 		if (ret == -1) {
 			err("recvfrom error (%d)\n", errno);
 			close(r_fd);
@@ -139,7 +145,6 @@ void do_query(AST_Device_Type device_type, AST_Device_Function device_function)
 			err("peer shutdowned");
 			break;
 		} else {
-		
 			_device_msg_deal(&reply, vdata_list, inet_ntoa(dev_addr.sin_addr));
 			info("%s\t", inet_ntoa(dev_addr.sin_addr));
 			info("%s\t", reply.device_name);
@@ -189,12 +194,12 @@ void do_query(AST_Device_Type device_type, AST_Device_Function device_function)
 			//info("--------------------------------------------------\n");
 		}
 	}
-	
+	printf("fwefefwef");
 	vdata_list.pop_back();
 	info("<<<<<\n");
 	close(r_fd);
 	close(q_fd);
-	exit(EXIT_SUCCESS);
+	
 }
 
 
@@ -272,7 +277,7 @@ static void do_query_json(AST_Device_Type device_type, AST_Device_Function devic
 	info("\n}\n");
 	close(r_fd);
 	close(q_fd);
-	exit(EXIT_SUCCESS);
+	
 }
 
 void node_list(int argc, char *argv[])
@@ -367,7 +372,6 @@ void parse_json(char *jsondata) {
 	
 		//创建解析对象进行解析
 		Document doc;
-		int tmp;
 		
 		if(!doc.Parse(jsondata).HasParseError())
 		{
@@ -571,7 +575,14 @@ void data_packing_toPC(string pc_data, int user_actioncode, int result, int msg_
 			break;
 			
 		case Server_return_device_list:
-			doc.AddMember("result", 200, allocator);
+			if(result == 200)
+			{
+				doc.AddMember("result", 200, allocator);
+			}
+			else if(result == 201)
+			{
+				doc.AddMember("result", 201, allocator);
+			}
 			doc.AddMember("return_message", "device list", allocator);
 			for(int i = 0; i<vdata_list.size(); i++)
 			{
@@ -799,9 +810,7 @@ int main(int argc, char *argv[])
 					
 				//注销登录
 				case PC_logout:
-					Compute_string_md5((unsigned char *)AST_SERVER_PASSWORD, strlen(AST_SERVER_PASSWORD), md5_str);
-					
-					if((AST_SERVER_UASE_NAME == v_Splitstr[0])  && (v_Splitstr[1] == md5_str))
+					if((AST_SERVER_UASE_NAME == v_Splitstr[0])  && (v_Splitstr[1] == AST_SERVER_PASSWORD))
 					{
 							login_status = 0;
 							data_packing_toPC("", Server_return_logout, 200, m_vpcid[0]);					
@@ -817,12 +826,15 @@ int main(int argc, char *argv[])
 				case PC_device_list:
 					if(login_status){
 						vdata_list.clear();
+						//先请求获得长时间
+						data_packing_toPC("", Server_return_device_list, 201, m_vpcid[0]);
+						sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
 						//接收获取设备信息的命令，执行node_list
 						node_list(argc, argv);
-
-						data_packing_toPC(NULL, Server_return_device_list, 200, m_vpcid[0]);
-						//返回数据给PC端软件
+						
+						data_packing_toPC("", Server_return_device_list, 200, m_vpcid[0]);
 						sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
+						
 					}
 					break;
 
