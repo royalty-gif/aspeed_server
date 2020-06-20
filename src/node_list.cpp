@@ -229,17 +229,53 @@ void data_packing_todev(int Srv_actioncode, int result, string data, int msg_id)
 	
 }
 
+/***************设备的解析和crc/OxFF检验******************/
+void dev2srv_json_check( )
+{
+	int rcv_len = -1;
+	char json_data[512];
+	char *parse_json_data; //数据解析存储
+	unsigned short  crc = 0;
+	
+	while(1)
+	{
+		rcv_len = recvfrom(dev_fd, json_data, sizeof(json_data), 0, (struct sockaddr *)&pdev_addr, &pdevaddr_len);	
+		printf("rcv_len:%d\n",rcv_len);
+		if(rcv_len > 0)
+		{
+			parse_json_data = (char *)malloc(rcv_len);
+			memset(parse_json_data, 0, rcv_len);
+			strncpy(parse_json_data, json_data, rcv_len-3);
+			devparse_json(parse_json_data);
+			crc = ((unsigned char)json_data[rcv_len - 3]<<8)+(unsigned char)json_data[rcv_len - 2];
+			if(0xff != (unsigned char)json_data[rcv_len - 1])
+			{
+				perror("end_mark");
+				data_packing_todev(COMMAND_REFUSE, 404, "", message_timeid());
+				sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
+				continue;
+			}
+			if(!check(crc, (const unsigned char *)parse_json_data, rcv_len-3))
+			{
+				perror("crc check!");
+				data_packing_todev(COMMAND_REFUSE, 401, "", message_timeid());
+				sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
+				continue;
+			}
+			if(m_vdevres[0] == 200)
+				break;
+		}	
+	}	
+	free(parse_json_data);
+}
+
 /******************dev_process请求***********************/
 
 void Srv2dev_query(int Server_actioncode)
 {
-	int rcv_len = -1;
-	int cycle;
-	char json_data[512];
-	char *parse_json_data;
 	
-	unsigned short  crc = 0;
-
+	int cycle; //用于循环连接设备
+	char *md5_str; //存储md5值
 	//UDP连接
 	dev_fd = Socket(AF_INET, SOCK_DGRAM, 0);
 	
@@ -251,7 +287,15 @@ void Srv2dev_query(int Server_actioncode)
 	switch(Server_actioncode)
 	{
 		case Server_get_md5value:
-			
+			//建立每台设备的连接,并获取md5值
+			md5_str = (char *)malloc(vmac_ip.size());
+			memset(md5_str, 0, vmac_ip.size());
+			for(cycle = 0; cycle < vmac_ip.size(); cycle++)
+			{
+				inet_pton(AF_INET, vmac_ip[cycle][1].data(), &pdev_addr.sin_addr); //循环连接
+				data_packing_todev(Server_get_md5value, 0, "", message_timeid());
+				sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
+			}
 			break;
 		case Server_start_file_tran:
 		
@@ -264,59 +308,19 @@ void Srv2dev_query(int Server_actioncode)
 			break;
 		case Server_trigger_redled:
 			memset(json_data, 0, sizeof(json_data));
-			for(cycle = 0; cycle < vmac_ip.size(); cycle++)
+			for(cycle = 0; cycle < vmac_ip.size(); cycle++) //匹配PC发到srv的mac对应的ip
 			{
 				if(m_vpcdata[0] == vmac_ip[cycle][0]){
-					inet_pton(AF_INET, vmac_ip[cycle][1].data(), &pdev_addr.sin_addr);
+					inet_pton(AF_INET, vmac_ip[cycle][1].data(), &pdev_addr.sin_addr);  //通过ip来确定连接
 					break;
 				}
 			}
 			data_packing_todev(Server_trigger_redled, 0, m_vpcdata[0], message_timeid());
-			printf("Server_trigger_redled:m_sdata2dev:%s\n",m_sdata2dev.data());
-			printf("m_sdata2dev.length():%d\n",m_sdata2dev.length());
-			printf("crc:%d\n",((unsigned char)m_sdata2dev[m_sdata2dev.length() - 3]<<8)+(unsigned char)m_sdata2dev[m_sdata2dev.length() - 2]);
 			sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
-			while(1)
-			{
-				rcv_len = recvfrom(dev_fd, json_data, sizeof(json_data), 0, (struct sockaddr *)&pdev_addr, &pdevaddr_len);	
-				printf("rcv_len:%d\n",rcv_len);
-				printf("json_data:%s\n",json_data);
-				if(rcv_len > 0)
-				{
-					printf("rcv_len:%d\n",rcv_len);
-					parse_json_data = (char *)malloc(rcv_len);
-					memset(parse_json_data, 0, rcv_len);
-					strncpy(parse_json_data, json_data, rcv_len-3);
-					devparse_json(parse_json_data);
-					crc = ((unsigned char)json_data[rcv_len - 3]<<8)+(unsigned char)json_data[rcv_len - 2];
-					printf("Server_trigger_redled crc: %d\n",crc);
-					if(0xff != (unsigned char)json_data[rcv_len - 1])
-					{
-						perror("end_mark");
-						data_packing_todev(COMMAND_REFUSE, 404, "", message_timeid());
-						sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
-						continue;
-					}
-					if(!check(crc, (const unsigned char *)parse_json_data, rcv_len-3))
-					{
-						perror("crc check!");
-						data_packing_todev(COMMAND_REFUSE, 401, "", message_timeid());
-						sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
-						continue;
-					}
-					if(m_vdevres[0] == 200)
-						break;
-						
-					if(m_vdevres[0] == 400 || m_vdevres[0] == 401)
-					{
-						
-					}
-				}
-				
-			}
+			dev2srv_json_check();
 			break;
 	}
-	free(parse_json_data);
+	free(md5_str);
 	close(dev_fd);	
 }
 
@@ -972,12 +976,12 @@ int main(int argc, char *argv[])
 						while(on)
 						{
 							//检验文件MD5
-							ret = Compute_file_md5(AST_FILE_NAME, md5_str);
-							if (0 == ret)
-							{
-								printf("[file - %s] md5 value:\n", AST_FILE_NAME);
-								printf("%s\n", md5_str);
-							}
+							//ret = Compute_file_md5(AST_FILE_NAME, md5_str);
+							//if (0 == ret)
+							//{
+							//	printf("[file - %s] md5 value:\n", AST_FILE_NAME);
+							//	printf("%s\n", md5_str);
+							//}
 							//向设备获取MD5值
 							//data_packing_todev(Server_get_md5value, (const char *)"", message_timeid());
 							//sendto(qdev_fd, &m_sdata2dev, sizeof(m_sdata2dev), 0, (struct sockaddr *)&ndev_addr, devaddr_len);

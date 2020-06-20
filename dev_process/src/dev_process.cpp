@@ -33,6 +33,9 @@
 using namespace std;
 using namespace rapidjson;
 
+//记录灯的状态变量
+static int led_status = 0;
+
 //备份一份发送信息
 string m_sdata2Srv_bak;
 
@@ -321,7 +324,15 @@ int main(int argc, char*argv[])
 					
 				//闪烁红灯	
 				case Server_trigger_redled:
-					system("echo timer > /sys/class/leds/led_pwr/trigger");
+					if(!led_status){
+						system("echo timer > /sys/class/leds/led_pwr/trigger");
+						led_status = 1;
+					}
+					else{
+						system("echo none > /sys/class/leds/led_pwr/trigger");
+						system("echo 1 > /sys/class/leds/led_pwr/brightness");
+						led_status = 0;
+					}
 					data_packing_toSrv(Dev_blink_redled_done, 200, m_vsrvid[0]);
 					m_sdata2Srv_bak.assign(m_sdata2Srv);
 					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
