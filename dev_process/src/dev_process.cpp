@@ -214,7 +214,7 @@ void parse_json(char *jsondata) {
 int main(int argc, char*argv[])
 {
 	int buf_len = 0;
-	unsigned char crc = 0;
+	unsigned short crc = 0;
 	
 	char recv_json[512];
 	char *parse_json_data;
@@ -237,6 +237,9 @@ int main(int argc, char*argv[])
 		m_vsrvdata.clear();
 		
 		buf_len = recvfrom(fd, &recv_json, sizeof(recv_json), 0, (struct sockaddr *)&addr, &addr_len);
+		printf("buf_len:%d\n",buf_len);
+		printf("recv_json:%s\n",recv_json);
+		
 		if(buf_len == -1 || buf_len == 0)
 		{
 			perror("recvfrom error!\n");
@@ -250,6 +253,7 @@ int main(int argc, char*argv[])
 			strncpy(parse_json_data, recv_json, buf_len-3);
 			parse_json(parse_json_data);
 			crc = ((unsigned char)recv_json[buf_len - 3]<<8)+(unsigned char)recv_json[buf_len - 2];
+			printf("crc:%d\n",crc);
 			if(0xff != (unsigned char)recv_json[buf_len - 1])
 			{
 				perror("end_mark");
@@ -305,7 +309,7 @@ int main(int argc, char*argv[])
 					
 				//写入MD5值	
 				case Server_write_md5Value:
-					sprintf(md5_data, "astparam s md5 %s", m_vsrvdata[0]);
+					sprintf(md5_data, "astparam s md5 %s", m_vsrvdata[0].c_str());
 					system(md5_data);
 					system("astparam save");
 					

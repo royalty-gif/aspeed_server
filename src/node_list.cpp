@@ -238,7 +238,7 @@ void Srv2dev_query(int Server_actioncode)
 	char json_data[512];
 	char *parse_json_data;
 	
-	unsigned char crc = 0;
+	unsigned short  crc = 0;
 
 	//UDP连接
 	dev_fd = Socket(AF_INET, SOCK_DGRAM, 0);
@@ -272,11 +272,15 @@ void Srv2dev_query(int Server_actioncode)
 				}
 			}
 			data_packing_todev(Server_trigger_redled, 0, m_vpcdata[0], message_timeid());
-		
+			printf("Server_trigger_redled:m_sdata2dev:%s\n",m_sdata2dev.data());
+			printf("m_sdata2dev.length():%d\n",m_sdata2dev.length());
+			printf("crc:%d\n",((unsigned char)m_sdata2dev[m_sdata2dev.length() - 3]<<8)+(unsigned char)m_sdata2dev[m_sdata2dev.length() - 2]);
 			sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
 			while(1)
 			{
 				rcv_len = recvfrom(dev_fd, json_data, sizeof(json_data), 0, (struct sockaddr *)&pdev_addr, &pdevaddr_len);	
+				printf("rcv_len:%d\n",rcv_len);
+				printf("json_data:%s\n",json_data);
 				if(rcv_len > 0)
 				{
 					printf("rcv_len:%d\n",rcv_len);
@@ -285,6 +289,7 @@ void Srv2dev_query(int Server_actioncode)
 					strncpy(parse_json_data, json_data, rcv_len-3);
 					devparse_json(parse_json_data);
 					crc = ((unsigned char)json_data[rcv_len - 3]<<8)+(unsigned char)json_data[rcv_len - 2];
+					printf("Server_trigger_redled crc: %d\n",crc);
 					if(0xff != (unsigned char)json_data[rcv_len - 1])
 					{
 						perror("end_mark");
@@ -624,6 +629,7 @@ msg_id： 五位id号
 
 void data_packing_toPC(string pc_data, int user_actioncode, int result, int msg_id)
 {
+	static int led_status = 0;
 	string data_log;
 	Document doc;
 	unsigned short crc_data = 0;
@@ -713,8 +719,15 @@ void data_packing_toPC(string pc_data, int user_actioncode, int result, int msg_
 			
 		case Server_return_redled_reply:
 			doc.AddMember("result", 200, allocator);
-			doc.AddMember("return_message", "blink start/stop", allocator);
-
+			
+			if(!led_status){
+				doc.AddMember("return_message", "blink start", allocator);
+				led_status = 1;
+			}
+			else {
+				doc.AddMember("return_message", "blink stop", allocator);
+				led_status = 0;
+			}
 			s = StringRef(pc_data.c_str());
 			doc.AddMember("data", s, allocator);
 			break;
@@ -996,9 +1009,10 @@ int main(int argc, char *argv[])
 				//触发灯操作
 				case PC_redled_blink_trigger:
 					if(login_status && !vdata_list.empty()){
+					
 						Srv2dev_query(Server_trigger_redled);
 						
-						data_packing_toPC(m_vpcdata[0], Server_return_redled_reply, 200, m_vpcid[1]);
+						data_packing_toPC(m_vpcdata[0], Server_return_redled_reply, 200, m_vpcid[0]);
 						m_sdata2PC_bak.assign(m_sdata2PC);	
 						sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
 					}
