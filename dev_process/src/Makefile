@@ -2,7 +2,7 @@ cc=g++
 cflags=-g
 ldflags=-g 
 CFLAGS=-I ../lib/
-OBJ = dev_process.o astnetwork.o crc16.o md5.o
+OBJ = dev_process.o astnetwork.o crc16.o md5.o wrap.o
 
 default: build
 	@echo "Done"

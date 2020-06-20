@@ -10,8 +10,7 @@
 #ifndef _DEV_PROCESS_
 #define _DEV_PROCESS_
 
-#define AST_DEV_PROCESS_QUERY_PORT 5555
-#define AST_DEV_PROCESS_REPLY_PORT 5556
+#define AST_DEV_PROCESS_PORT "50020"
 #define AST_JSON_MAX_SIZE 1024
 
 #define AST_FILE_NAME (char *)"file.tar.gz"

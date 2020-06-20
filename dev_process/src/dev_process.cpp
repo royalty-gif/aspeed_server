@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <getopt.h>
 #include <signal.h>
 #include <sched.h>
@@ -19,6 +20,7 @@
 #include <arpa/inet.h>
 #include "crc16.h"
 #include "md5.h"
+#include "head4sock.h"
 
 #include "rapidjson/document.h"
 #include "rapidjson/stringbuffer.h"
@@ -31,6 +33,14 @@
 using namespace std;
 using namespace rapidjson;
 
+//备份一份发送信息
+string m_sdata2Srv_bak;
+
+//判断是否存在md5的变量
+int is_md5 = 0;
+
+//md5值
+char md5_data[32];
 
 //创建收集服务器信息的容器
 vector<string> m_vsrvdata;
@@ -40,7 +50,7 @@ vector<int> m_vsrvcode,m_vsrvid;
 string m_sdata2Srv;
 
 //UDP连接变量
-static int q_fd, r_fd;
+static int fd = 0;
 struct sockaddr_in addr;
 static socklen_t addr_len = sizeof(addr);
 
@@ -59,8 +69,12 @@ void data_packing_toSrv(int user_actioncode, int result, int msg_id)
 	Document doc;
 	unsigned short crc_data = 0;
 	Value s;
+	string data_log;
+	FILE *fp = NULL;
 		
 	m_sdata2Srv.clear();
+	data_log.clear();
+	memset(md5_data, 0, sizeof(md5_data));
 	s.SetString("");
 	
 	doc.SetObject();
@@ -75,7 +89,20 @@ void data_packing_toSrv(int user_actioncode, int result, int msg_id)
 			{
 				doc.AddMember("result", 200, allocator);
 				doc.AddMember("return_message", "md5 value", allocator);
-				doc.AddMember("data", "success", allocator);
+				
+				fp = popen("astparam g md5", "r");
+				if(fp == NULL)
+				{
+					printf("popen error!\n");
+					exit(-1);
+				}
+				while(fgets(md5_data, sizeof(md5_data), fp) != NULL)
+				{
+					data_log = md5_data;
+					s = StringRef(data_log.c_str());
+					doc.AddMember("data", s, allocator);
+					break;
+				}
 			}
 			else if(result == 100)  //无MD5的情况
 			{
@@ -128,6 +155,16 @@ void data_packing_toSrv(int user_actioncode, int result, int msg_id)
 				doc.AddMember("data", "", allocator);
 			}
 			break;
+			
+		case COMMAND_REFUSE:
+			if(result == 400)
+				doc.AddMember("result", 400, allocator);
+			else
+				doc.AddMember("result", 401, allocator);
+				
+			doc.AddMember("return_message", "command format error,please check it", allocator);
+			doc.AddMember("data", "", allocator);
+			break;
 	}
 	doc.AddMember("msg_id", msg_id, allocator);
 	
@@ -178,30 +215,28 @@ int main(int argc, char*argv[])
 {
 	int buf_len = 0;
 	unsigned char crc = 0;
-	char grp_addr[] = AST_NAME_SERVICE_GROUP_ADDR;
 	
 	char recv_json[512];
 	char *parse_json_data;
 	//UDP连接
-	q_fd = udp_create_receiver(grp_addr, AST_DEV_PROCESS_QUERY_PORT);
-	if (q_fd == -1) {
-		exit(EXIT_FAILURE);
-	}
-	r_fd = udp_create_sender();
-	if (r_fd == -1) {
-		close(q_fd);
-		exit(EXIT_FAILURE);
-	}
+	fd = Socket(AF_INET, SOCK_DGRAM, 0);
 	
-	addr.sin_port = htons(AST_DEV_PROCESS_REPLY_PORT);
+	bzero(&addr, addr_len);
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(atoi(AST_DEV_PROCESS_PORT));
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	
+	Bind(fd, (struct sockaddr *)&addr, addr_len);
+
 	while(1)
 	{
+		memset(md5_data, 0, sizeof(md5_data));
 		memset(recv_json, 0, sizeof(recv_json));
 		m_vsrvcode.clear();
 		m_vsrvid.clear();
 		m_vsrvdata.clear();
 		
-		buf_len = recvfrom(q_fd, &recv_json, sizeof(recv_json), 0, (struct sockaddr *)&addr, &addr_len);
+		buf_len = recvfrom(fd, &recv_json, sizeof(recv_json), 0, (struct sockaddr *)&addr, &addr_len);
 		if(buf_len == -1 || buf_len == 0)
 		{
 			perror("recvfrom error!\n");
@@ -218,15 +253,15 @@ int main(int argc, char*argv[])
 			if(0xff != (unsigned char)recv_json[buf_len - 1])
 			{
 				perror("end_mark");
-				data_packing_toSrv(m_vsrvcode[0], 404, m_vsrvid[0]);
-				sendto(r_fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
+				data_packing_toSrv(COMMAND_REFUSE, 404, m_vsrvid[0]);
+				sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
 				continue;
 			}
 			if(!check(crc, (const unsigned char *)parse_json_data, buf_len-3))
 			{
 				perror("crc check!");
-				data_packing_toSrv(m_vsrvcode[0], 401, m_vsrvid[0]);
-				sendto(r_fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
+				data_packing_toSrv(COMMAND_REFUSE, 401, m_vsrvid[0]);
+				sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
 				continue;
 			}
 			
@@ -234,34 +269,68 @@ int main(int argc, char*argv[])
 			{
 				//返回MD5值
 				case Server_get_md5value:
+					if(is_md5)
+						data_packing_toSrv(Dev_reply_md5Value, 200, m_vsrvid[0]);
+					else
+						data_packing_toSrv(Dev_reply_md5Value, 100, m_vsrvid[0]);
 					
+					m_sdata2Srv_bak.assign(m_sdata2Srv);	
+					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
 					break;
 				
 				//启动接收固件	
 				case Server_start_file_tran:
-				
+					data_packing_toSrv(Dev_ready_filercv, 200, m_vsrvid[0]);
+					m_sdata2Srv_bak.assign(m_sdata2Srv);
+					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
+					
+					//文件传输操作
+					
+					
 					break;
 					
 				//开始设备升级	
 				case Server_update_device:
-				
+					data_packing_toSrv(Dev_update_start, 200, m_vsrvid[0]);
+					m_sdata2Srv_bak.assign(m_sdata2Srv);
+					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
+					
+					//升级过程
+					
+					//设备升级完成
+					data_packing_toSrv(Dev_update_end, 200, m_vsrvid[0]);
+					m_sdata2Srv_bak.assign(m_sdata2Srv);
+					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
 					break;
 					
 				//写入MD5值	
 				case Server_write_md5Value:
-				
+					sprintf(md5_data, "astparam s md5 %s", m_vsrvdata[0]);
+					system(md5_data);
+					system("astparam save");
+					
+					is_md5 = 1; //标志为1
+					data_packing_toSrv(Dev_reply_wmd5Value, 200, m_vsrvid[0]);
+					m_sdata2Srv_bak.assign(m_sdata2Srv);
+					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
 					break;
 					
 				//闪烁红灯	
 				case Server_trigger_redled:
+					system("echo timer > /sys/class/leds/led_pwr/trigger");
+					data_packing_toSrv(Dev_blink_redled_done, 200, m_vsrvid[0]);
+					m_sdata2Srv_bak.assign(m_sdata2Srv);
+					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
 					break;
 				
+				//接收到错误
+				case COMMAND_REFUSE:
+					sendto(fd, m_sdata2Srv_bak.data(), m_sdata2Srv_bak.length(), 0, (struct sockaddr *)&addr, addr_len);
 			}
 		}
+		free(parse_json_data);
 	}
-	
-	close(r_fd);
-	close(q_fd);
+	close(fd);
 	return 0;
 }
 

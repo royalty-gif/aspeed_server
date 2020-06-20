@@ -11,10 +11,9 @@
 #define _NAME_SERVICE_
 
 #define AST_CONNECT_PORT "50010"
+#define AST_DEV_PROCESS_PORT "50020"
 #define AST_NAME_SERVICE_QUERY_PORT 3333
 #define AST_NAME_SERVICE_REPLY_PORT 3334
-#define AST_DEV_PROCESS_QUERY_PORT 5555
-#define AST_DEV_PROCESS_REPLY_PORT 5556
 #define AST_JSON_MAX_SIZE 1024
 #define AST_SERVER_UASE_NAME "aspeed"
 #define AST_SERVER_PASSWORD "123456"
@@ -92,6 +91,8 @@ typedef enum _Server_toPC_ActionCode_
 	Server_return_cancel_update,
 	Server_return_upload,
 	Server_return_redled_reply,
+	Server_return_update_end,
+	Server_return_update_status,
 }Server_toPC_ActionCode;
 
 /************服务器对设备的操作码***************/
