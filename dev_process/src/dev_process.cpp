@@ -322,7 +322,7 @@ int main(int argc, char*argv[])
 					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
 					break;
 					
-				//闪烁红灯	
+				//闪烁红灯(√)
 				case Server_trigger_redled:
 					if(!led_status){
 						system("echo timer > /sys/class/leds/led_pwr/trigger");
