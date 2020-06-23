@@ -36,7 +36,8 @@ using namespace rapidjson;
 //备份信息的变量
 static string m_sdata2PC_bak,m_sdata2dev_bak;
 
-string md5_str; //存储md5值
+//存储md5值
+string md5_str; 
 
 //创建容器收集设备信息
 vector<string> vdata_list;
@@ -49,7 +50,7 @@ vector<string> m_vpcdata;
 vector<int> m_vpccode,m_vpcid;
 
 //创建收集设备响应信息的容器
-vector<string> m_vdevdata;
+vector<string> m_vdevdata,m_vdevmeg;
 vector<int> m_vdevcode,m_vdevid,m_vdevres;
 
 //发送给PC的json变量
@@ -88,9 +89,9 @@ unsigned char TX_CheckSum(unsigned char *buf, unsigned char len) //buf为数组�
 }
 
 /* 和校验：接收方调用,将所有的数据累加之后(溢出丢弃) 加一.返回值 */
-unsigned char RX_CheckSum(unsigned char *buf, unsigned char len) //buf为数组，len为数组长度
+int RX_CheckSum(unsigned char *buf, int len) //buf为数组，len为数组长度
 {
-    unsigned char i, ret = 0;
+    int i, ret = 0;
 
     for(i=0; i<len; i++)
     {
@@ -189,6 +190,12 @@ void devparse_json(char *jsondata) {
 				m_vdevres.push_back(doc["result"].GetInt());
 			}	
 			
+			//提取return_message
+			if(doc.HasMember("return_message"))
+			{
+				m_vdevmeg.push_back(doc["return_message"].GetString());
+			}	
+			
 			//提取数据信息
 			if(doc.HasMember("data"))
 			{
@@ -264,14 +271,14 @@ void dev2srv_json_check(void)
 	char dev_json[512];
 	char *dev_parse; //数据解析存储
 	unsigned short  dev_crc = 0;
-	
-	m_vdevdata.clear();
-	m_vdevcode.clear();
-	m_vdevid.clear();
-	m_vdevres.clear();
-	
+
 	while(1)
 	{
+		m_vdevdata.clear();
+		m_vdevcode.clear();
+		m_vdevid.clear();
+		m_vdevres.clear();
+		m_vdevmeg.clear();
 		memset(dev_json, 0, sizeof(dev_json));
 		rcv_len = recvfrom(dev_fd, dev_json, sizeof(dev_json), 0, (struct sockaddr *)&pdev_addr, &pdevaddr_len);	
 		printf("rcv_len:%d\n",rcv_len);
@@ -303,6 +310,7 @@ void dev2srv_json_check(void)
 				sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
 				continue;
 			}
+				
 			if(m_vdevres[0] == 200)
 				break;
 		}	
@@ -317,6 +325,8 @@ void Srv2dev_query(int Server_actioncode)
 	
 	int cycle; //用于循环连接设备
 	string dev_data; //用于对数据进行处理
+	static vector<string> v_deal_mac;  //储存需要升级的设备mac地址
+	static vector<string> v_deal_ip;  //储存需要升级的设备mac地址对应的ip
 	int ret = -1;
 	
 	//UDP连接
@@ -329,7 +339,7 @@ void Srv2dev_query(int Server_actioncode)
 	
 	switch(Server_actioncode)
 	{
-		case Server_get_md5value:
+		case Server_get_md5value:  //服务器获取md5值
 			//操作：向设备获取MD5值,比较后一致，不升级，反之发送指令升级
 			//建立每台设备的连接,并获取md5值
 			m_vpcdata.clear();
@@ -345,9 +355,9 @@ void Srv2dev_query(int Server_actioncode)
 			{
 				inet_pton(AF_INET, vmac_ip[cycle][1].data(), &pdev_addr.sin_addr); //循环连接
 				data_packing_todev(Server_get_md5value, 0, "", message_timeid());
+				m_sdata2dev_bak.assign(m_sdata2dev);
 				sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
 				dev2srv_json_check();
-				printf("dasdasdc\n");
 				if(m_vdevdata[0] == md5_str)
 				{
 					dev_data += "N" + vmac_ip[cycle][0] + ",";
@@ -355,24 +365,41 @@ void Srv2dev_query(int Server_actioncode)
 				else
 				{
 					dev_data += "Y" + vmac_ip[cycle][0] + ",";
+					v_deal_mac.push_back(vmac_ip[cycle][0]); //将信息存储
+					v_deal_ip.push_back(vmac_ip[cycle][1]);
 				}
 			}
 			m_vpcdata[0] = dev_data;
 			printf("%s",dev_data);
 			break;
-		case Server_start_file_tran:
+			
+		case Server_start_file_tran:  //服务器开始固件传输
+		
+			for(cycle = 0; cycle < v_deal_mac.size(); cycle++)
+			{
+				inet_pton(AF_INET, v_deal_ip[cycle].data(), &pdev_addr.sin_addr); //循环连接
+				data_packing_todev(Server_start_file_tran, 0, "", message_timeid());
+				m_sdata2dev_bak.assign(m_sdata2dev);
+				sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
+				dev2srv_json_check();	
+				
+				//开始设备传输
+				//do_put();
+			}
+			
+			
+			break;
+		case Server_update_device:  //发送开始升级设备命令（固件传输结束后）
 		
 			break;
-		case Server_update_device:
-		
-			break;
-		case Server_write_md5Value:
+		case Server_write_md5Value:  //发送写md5的命令
 			data_packing_todev(Server_write_md5Value, 0, m_vpcdata[0], message_timeid());
+			m_sdata2dev_bak.assign(m_sdata2dev);
 			sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
 			dev2srv_json_check();
 		
 			break;
-		case Server_trigger_redled:
+		case Server_trigger_redled:  //发送灯命令
 			
 			for(cycle = 0; cycle < vmac_ip.size(); cycle++) //匹配PC发到srv的mac对应的ip
 			{
@@ -382,6 +409,7 @@ void Srv2dev_query(int Server_actioncode)
 				}
 			}
 			data_packing_todev(Server_trigger_redled, 0, m_vpcdata[0], message_timeid());
+			m_sdata2dev_bak.assign(m_sdata2dev);
 			sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
 			dev2srv_json_check();
 			break;
@@ -699,7 +727,6 @@ msg_id： 五位id号
 
 void data_packing_toPC(string pc_data, int user_actioncode, int result, int msg_id)
 {
-	static int led_status = 0;
 	string data_log;
 	Document doc;
 	unsigned short crc_data = 0;
@@ -789,14 +816,12 @@ void data_packing_toPC(string pc_data, int user_actioncode, int result, int msg_
 			
 		case Server_return_redled_reply:
 			doc.AddMember("result", 200, allocator);
-			
-			if(!led_status){
+			if(!m_vdevmeg[0].compare(0,5,"blink")){
 				doc.AddMember("return_message", "blink start", allocator);
-				led_status = 1;
 			}
-			else {
+			
+			if(!m_vdevmeg[0].compare(0,4,"stop")){
 				doc.AddMember("return_message", "blink stop", allocator);
-				led_status = 0;
 			}
 			s = StringRef(pc_data.c_str());
 			doc.AddMember("data", s, allocator);
@@ -828,18 +853,22 @@ void data_packing_toPC(string pc_data, int user_actioncode, int result, int msg_
 
 }
 
-/************获取文件*************/
+/************从PC端获取文件*************/
 
-void do_get(char *local_file)
+void do_get(void)
 {
 	static int total_block = 0;  //记录总块数
+	static int package_num = 0;  //每个包编号
 	char tran_status; //记录传输状态
+	char f_buf[525];
 	struct Transfer_packet Send_packet,Recv_packet; 
 	int r_size = 0;
+	unsigned char rcv_crc = 0;
 	
-	FILE *fp = fopen(local_file, "w");
+	memset(f_buf, 0, 525);
+	FILE *fp = fopen(AST_FILE_NAME, "w");
 	if(fp == NULL){
-		printf("Create file \"%s\" error.\n", local_file);
+		printf("Create file \"%s\" error.\n", AST_FILE_NAME);
 		return;
 	}
 	
@@ -855,6 +884,7 @@ void do_get(char *local_file)
 			sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, len);
 		}
 		else{
+		
 			switch(Recv_packet.packet_head.ex_data[0])
 			{
 				case AST_START_TRAN:  //文件开始传输指令
@@ -869,11 +899,26 @@ void do_get(char *local_file)
 				case AST_WDATA:  // 写数据指令
 					if(tran_status)
 					{
-						Send_packet.packet_head.ex_data[0] = AST_REPLY_WDATA;
-						sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, len);
-						fwrite(Recv_packet.data, 1, r_size - 12, fp);
+						//记录包的编号
+						package_num = (Recv_packet.packet_head.ex_data[1] << 16) +  
+											(Recv_packet.packet_head.ex_data[2] << 8) + 
+											Recv_packet.packet_head.ex_data[3];
+						//数据校验
+						rcv_crc = RX_CheckSum(Recv_packet.data, TRAN_SIZE);
+						if(rcv_crc + Recv_packet.packet_head.ex_data[4] == 0){
+							Send_packet.packet_head.ex_data[0] = AST_REPLY_WDATA;
+							sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, len);
+							fwrite(Recv_packet.data, 1, r_size - 12, fp);
+						}
+						else{
+							perror("checksum error");
+							Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
+							Send_packet.packet_head.ex_data[1] = package_num >> 16;
+							Send_packet.packet_head.ex_data[2] = (package_num >> 8) && 0x00FF;
+							Send_packet.packet_head.ex_data[3] = package_num && 0x0000FF;
+							sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, len);
+						}
 					}
-					
 					break;
 				
 				case AST_CANCEL_TRAN: //取消数据传输的指令
@@ -882,12 +927,19 @@ void do_get(char *local_file)
 					Send_packet.packet_head.ex_data[0] = AST_REPLY_CANCEL_TRAN;
 					sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, len);
 					break;
+					
+				case AST_END_TRAN:  //完成数据传输
+					if(tran_status){
+						fclose(fp);
+						Send_packet.packet_head.ex_data[0] = AST_REPLY_END_TRAN;
+						sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, len);
+					}
+					break;
 			
 			}
-			if(tran_status){
-				tran_status = 0;
-				fclose(fp);
-			}
+			if(Recv_packet.packet_head.ex_data[0] == AST_CANCEL_TRAN ||
+					Recv_packet.packet_head.ex_data[0] == AST_END_TRAN)
+					break;
 		}
 	}
 }
@@ -1081,6 +1133,7 @@ int main(int argc, char *argv[])
 							sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
 							
 							//操作2：开始文件传输 PC ← Server ↔ Dev
+							Srv2dev_query(Server_start_file_tran);
 						}	
 					}
 					break;
@@ -1092,20 +1145,18 @@ int main(int argc, char *argv[])
 						m_sdata2PC_bak.assign(m_sdata2PC);
 						sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
 								
-						do_get(AST_FILE_NAME); //文件传输
-							
+						do_get(); //文件传输	
 					}
 					break;
+					
 				//触发灯操作(√)
 				case PC_redled_blink_trigger:
 					if(login_status && !vdata_list.empty()){
-					
 						Srv2dev_query(Server_trigger_redled);
 						
 						data_packing_toPC(m_vpcdata[0], Server_return_redled_reply, 200, m_vpcid[0]);
-						m_sdata2PC_bak.assign(m_sdata2PC);	
+						m_sdata2PC_bak.assign(m_sdata2PC);
 						sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
-						
 					}
 					break;
 				
@@ -1114,13 +1165,11 @@ int main(int argc, char *argv[])
 					sendto(fd_udp, m_sdata2PC_bak.data(), m_sdata2PC_bak.length(), 0, (struct sockaddr *)&srvaddr, len);
 					break;
 			}
-			
 			free(parse_json_data);
 		}		
 	}
 
 	close(fd_udp);
-
 	return 0;
 }
 

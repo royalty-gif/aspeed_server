@@ -29,6 +29,8 @@
 #define AST_WDATA 0x02
 #define AST_REPLY_WDATA 0x20
 #define AST_CHECK_FAILED 0x2F
+#define AST_END_TRAN 0x04
+#define AST_REPLY_END_TRAN 0x40
 #define AST_CANCEL_TRAN 0x05
 #define AST_REPLY_CANCEL_TRAN 0x50
 
@@ -46,13 +48,13 @@ struct Transfer_packet_head{
 	short check_code = AST_CHECK_CODE;
 	short pro_code = AST_PRO_CODE;
 	short data_len = 0x00;
-	char ex_field = AST_EX_FILED;
-	char ex_data[EX_SIZE]; //操作码（1）+ 块编号（3）+和校验（1）
+	unsigned char ex_field = AST_EX_FILED;
+	unsigned char ex_data[EX_SIZE]; //操作码（1）+ 块编号（3）+和校验（1）
 };
 
 struct Transfer_packet{
 	Transfer_packet_head packet_head;
-	char data[TRAN_SIZE];
+	unsigned char data[TRAN_SIZE];
 };
 
 /************设备类型***************/

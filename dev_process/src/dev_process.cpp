@@ -57,6 +57,110 @@ static int fd = 0;
 struct sockaddr_in addr;
 static socklen_t addr_len = sizeof(addr);
 
+/* 和校验：接收方调用,将所有的数据累加之后(溢出丢弃) 加一.返回值 */
+int RX_CheckSum(unsigned char *buf, int len) //buf为数组，len为数组长度
+{
+    int i, ret = 0;
+
+    for(i=0; i<len; i++)
+    {
+        ret += *(buf++);
+    }
+    return ret + 1;
+}
+
+/*****************从服务器上获取文件*************/
+
+void do_get(void)
+{
+	static int total_block = 0;  //记录总块数
+	static int package_num = 0;  //每个包编号
+	unsigned char tran_status; //记录传输状态
+	struct Transfer_packet Send_packet,Recv_packet; 
+	int r_size = 0;
+	unsigned char rcv_crc = 0;
+	
+	FILE *fp = fopen(AST_FILE_NAME, "w");
+	if(fp == NULL){
+		printf("Create file \"%s\" error.\n", AST_FILE_NAME);
+		return;
+	}
+	
+	while(1){
+		memset(&Send_packet, 0, sizeof(Send_packet));
+		memset(&Recv_packet, 0, sizeof(Recv_packet));
+	
+		r_size = recvfrom(fd, &Recv_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, &addr_len);
+		if(r_size > 0 && r_size < 12) //数据包不足12
+		{
+			printf("Bad packet:%d\n",r_size);
+			Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
+			sendto(fd, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, addr_len);
+		}
+		else{
+		
+			switch(Recv_packet.packet_head.ex_data[0])
+			{
+				case AST_START_TRAN:  //文件开始传输指令
+					tran_status = 1;
+					total_block = (Recv_packet.packet_head.ex_data[1] << 16) +  
+											(Recv_packet.packet_head.ex_data[2] << 8) + 
+											Recv_packet.packet_head.ex_data[3];
+					Send_packet.packet_head.ex_data[0] = AST_REPLY_START_TRAN;
+					sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
+					break;
+					
+				case AST_WDATA:  // 写数据指令
+					if(tran_status)
+					{
+						//记录包的编号
+						package_num = (Recv_packet.packet_head.ex_data[1] << 16) +  
+											(Recv_packet.packet_head.ex_data[2] << 8) + 
+											Recv_packet.packet_head.ex_data[3];
+						//数据校验
+						rcv_crc = RX_CheckSum(Recv_packet.data, TRAN_SIZE);
+						if(rcv_crc + Recv_packet.packet_head.ex_data[4] == 0){
+							Send_packet.packet_head.ex_data[0] = AST_REPLY_WDATA;
+							sendto(fd, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, addr_len);
+							fwrite(Recv_packet.data, 1, r_size - 12, fp);
+						}
+						else{
+							perror("checksum error");
+							Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
+							Send_packet.packet_head.ex_data[1] = package_num >> 16;
+							Send_packet.packet_head.ex_data[2] = (package_num >> 8) && 0x00FF;
+							Send_packet.packet_head.ex_data[3] = package_num && 0x0000FF;
+							sendto(fd, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, addr_len);
+						}
+					}
+					break;
+				
+				case AST_CANCEL_TRAN: //取消数据传输的指令
+					tran_status = 0;
+					fclose(fp);
+					Send_packet.packet_head.ex_data[0] = AST_REPLY_CANCEL_TRAN;
+					sendto(fd, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, addr_len);
+					break;
+					
+				case AST_END_TRAN:  //完成数据传输
+					if(tran_status){
+						fclose(fp);
+						Send_packet.packet_head.ex_data[0] = AST_REPLY_END_TRAN;
+						sendto(fd, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, addr_len);
+					}
+					break;
+			}
+			
+			if(Recv_packet.packet_head.ex_data[0] == AST_CANCEL_TRAN ||
+					Recv_packet.packet_head.ex_data[0] == AST_END_TRAN)
+					break;
+			
+		}
+	}
+}
+
+
+
 /************json封装函数发送给server**************
 pc_data :PC发送过来的data数据
 user_actioncode：命令码
@@ -154,7 +258,12 @@ void data_packing_toSrv(int user_actioncode, int result, int msg_id)
 			if(result == 200)
 			{
 				doc.AddMember("result", 200, allocator);
-				doc.AddMember("return_message", "blink redled success", allocator);
+				
+				if(led_status)
+					doc.AddMember("return_message", "blink redled success", allocator);
+				else 
+					doc.AddMember("return_message", "stop redled success", allocator);
+					
 				doc.AddMember("data", "", allocator);
 			}
 			break;
@@ -292,7 +401,7 @@ int main(int argc, char*argv[])
 					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
 					
 					//文件传输操作
-					
+					do_get();
 					
 					break;
 					

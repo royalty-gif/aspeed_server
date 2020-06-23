@@ -15,7 +15,24 @@
 
 #define AST_FILE_NAME (char *)"file.tar.gz"
 
+#define AST_CHECK_CODE 0x424c  //ASCII码 BL
+#define AST_PRO_CODE 0x138d    //项目代号 5005
+#define AST_EX_FILED 0x05      //扩展字段，此处扩展5字节
+
+//文件传输操作码定义
+#define AST_START_TRAN 0x01
+#define AST_REPLY_START_TRAN 0x10
+#define AST_WDATA 0x02
+#define AST_REPLY_WDATA 0x20
+#define AST_CHECK_FAILED 0x2F
+#define AST_END_TRAN 0x04
+#define AST_REPLY_END_TRAN 0x40
+#define AST_CANCEL_TRAN 0x05
+#define AST_REPLY_CANCEL_TRAN 0x50
+
 #define AST_DATE_SIZE 512
+#define EX_SIZE 5
+#define TRAN_SIZE 512
 
 #include <iostream>
 #include <string>
@@ -23,46 +40,18 @@
 using namespace std;
 
 /************文件传输结构体***************/
-struct Transfer_packet{
-	short check_code;
-	short pro_code;
-	short data_len;
-	char ex_field;
-	char data[AST_DATE_SIZE];
+struct Transfer_packet_head{
+	short check_code = AST_CHECK_CODE;
+	short pro_code = AST_PRO_CODE;
+	short data_len = 0x00;
+	unsigned char ex_field = AST_EX_FILED;
+	unsigned char ex_data[EX_SIZE]; //操作码（1）+ 块编号（3）+和校验（1）
 };
 
-/************设备类型***************/
-
-typedef enum _AST_Device_Type_
-{
-	Type_Any = 0,
-	Type_Host,
-	Type_Client,
-	Type_Unknown,
-} AST_Device_Type ;
-
-/************设备函数***************/
-
-typedef enum _AST_Device_Function_
-{
-	Function_Any = 0,
-	Function_USB,
-	Function_Digital,
-	Function_Analog,
-	Function_Unknown,
-} AST_Device_Function ;
-
-/************设备状态***************/
-
-typedef enum _AST_Device_Status_
-{
-	Status_Any = 0,
-	Status_Available,
-	Status_Busy,
-	Status_Idle,
-	Status_Unknown,
-} AST_Device_Status ;
-
+struct Transfer_packet{
+	Transfer_packet_head packet_head;
+	unsigned char data[TRAN_SIZE];
+};
 
 
 /************服务器对设备的操作码***************/
