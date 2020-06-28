@@ -14,6 +14,7 @@
 #include <getopt.h>
 #include <signal.h>
 #include <pthread.h>
+#include <arpa/inet.h> 
 #include "debug.h"
 #include "astnetwork.h"
 #include "name_service.h"
@@ -32,6 +33,9 @@
 
 using namespace std;
 using namespace rapidjson;
+
+//定义一个vector存储每个分割的字符串
+vector<string> v_Splitstr;
 
 //备份信息的变量
 static string m_sdata2PC_bak,m_sdata2dev_bak;
@@ -89,9 +93,10 @@ unsigned char TX_CheckSum(unsigned char *buf, unsigned char len) //buf为数组�
 }
 
 /* 和校验：接收方调用,将所有的数据累加之后(溢出丢弃) 加一.返回值 */
-int RX_CheckSum(unsigned char *buf, int len) //buf为数组，len为数组长度
+unsigned char RX_CheckSum(unsigned char *buf, int len) //buf为数组，len为数组长度
 {
-    int i, ret = 0;
+    int i;
+    unsigned char ret = 0;
 
     for(i=0; i<len; i++)
     {
@@ -344,10 +349,10 @@ void Srv2dev_query(int Server_actioncode)
 			//建立每台设备的连接,并获取md5值
 			m_vpcdata.clear();
 			md5_str.clear();
-			ret = Compute_file_md5(AST_FILE_NAME, (char *)md5_str.c_str());
+			ret = Compute_file_md5(AST_TX_FILE, (char *)md5_str.c_str());
 			if (0 == ret)
 			{
-				printf("[file - %s] md5 value:\n", AST_FILE_NAME);
+				printf("[file - %s] md5 value:\n", AST_TX_FILE);
 				printf("%s\n", md5_str.c_str());
 			}
 			
@@ -795,7 +800,9 @@ void data_packing_toPC(string pc_data, int user_actioncode, int result, int msg_
 		case Server_return_upload:
 			doc.AddMember("result", 200, allocator);
 			doc.AddMember("return_message", "firmware upload start", allocator);
-			doc.AddMember("data", "", allocator);
+			
+			s = StringRef(pc_data.c_str());
+			doc.AddMember("data", s, allocator);
 			break;
 			
 		case Server_return_update:
@@ -853,45 +860,142 @@ void data_packing_toPC(string pc_data, int user_actioncode, int result, int msg_
 
 }
 
-/************从PC端获取文件*************/
-
-void do_get(void)
+/************获取文件大小*************/
+int get_file_size(FILE * file_handle)
 {
-	static int total_block = 0;  //记录总块数
-	static int package_num = 0;  //每个包编号
-	char tran_status; //记录传输状态
-	char f_buf[525];
-	struct Transfer_packet Send_packet,Recv_packet; 
-	int r_size = 0;
-	unsigned char rcv_crc = 0;
+	//获取当前读取文件的位置 进行保存
+	unsigned int current_read_position=ftell( file_handle );
+	int file_size;
+	fseek( file_handle,0,SEEK_END );
+	//获取文件的大小
+	file_size=ftell( file_handle );
+	//恢复文件原来读取的位置
+	fseek( file_handle,current_read_position,SEEK_SET );
+
+	return file_size;
+}
+
+/************从服务端给设备传输文件*************/
+
+void do_put(void)
+{
+	static int package_number = 0;  //每个包编号
+	unsigned int size = 0; //记录文件大小
 	
-	memset(f_buf, 0, 525);
-	FILE *fp = fopen(AST_FILE_NAME, "w");
-	if(fp == NULL){
-		printf("Create file \"%s\" error.\n", AST_FILE_NAME);
+	int r_size = 0;
+	unsigned char start_status = 0;
+	
+	struct Transfer_packet Send_packet,Recv_packet; 
+	
+	FILE *put_fp = fopen(AST_TX_FILE, "r");
+	if(put_fp == NULL){
+		printf("File not exists!\n");
 		return;
 	}
 	
-	while(1){
-		memset(&Send_packet, 0, sizeof(Send_packet));
-		memset(&Recv_packet, 0, sizeof(Recv_packet));
+	size = get_file_size(put_fp);
+	if(size % 512)   //查看是否整除
+		size = (size >> 9) + 1;
+	else
+		size = (size >> 9);
 	
-		r_size = recvfrom(fd_udp, &Recv_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, &len);
+	//发送 文件开始传输包
+	Send_packet.packet_head.ex_data[0] = AST_START_TRAN;  
+	Send_packet.packet_head.ex_data[1] = size >> 16;
+	Send_packet.packet_head.ex_data[2] = (size >> 8) && 0x00FF;
+	Send_packet.packet_head.ex_data[3] = size && 0x0000FF;
+	sendto(dev_fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
+	
+	while(1)
+	{
+		r_size = recvfrom(dev_fd, &Recv_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&pdev_addr, &pdevaddr_len);
+		printf("recvfrom r_size:%d\n",r_size);
+		printf("crc:%#x\n",Recv_packet.packet_head.ex_data[4]);
+		
 		if(r_size > 0 && r_size < 12) //数据包不足12
 		{
 			printf("Bad packet:%d\n",r_size);
 			Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
-			sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, len);
+			sendto(dev_fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
 		}
 		else{
+			switch(Recv_packet.packet_head.ex_data[0])
+			{
+				case AST_REPLY_START_TRAN:
+					start_status = 1;
+					break;
+					
+				case AST_REPLY_WDATA:
+					if(start_status)
+					{
+						memset(Send_packet.data, 0, TRAN_SIZE); //清空数据
+						
+						package_number ++;
+						//Send_packet.packet_head.data_len = ; 
+						Send_packet.packet_head.ex_data[0] = AST_WDATA;
+						Send_packet.packet_head.ex_data[1] = package_number >> 16;
+						Send_packet.packet_head.ex_data[2] = (package_number >> 8) && 0x00FF;
+						Send_packet.packet_head.ex_data[3] = package_number && 0x0000FF;
+						
+					}
+					break;
+					
+				case AST_REPLY_END_TRAN:
+					if(start_status)
+					{
+						
+					}
+					break;
+					
+				case AST_REPLY_CANCEL_TRAN:
+				
+					break;
+					
+				case AST_CHECK_FAILED:
+				
+					break;
+
+			}
 		
+		}
+	}
+}
+
+/************从PC端获取文件*************/
+
+void do_get(char *file_name)
+{
+	static int package_num = 0;  //每个包编号
+	char tran_status; //记录传输状态
+	struct Transfer_packet Send_packet,Recv_packet; 
+	int r_size = 0;
+	unsigned short data_len = 0;
+	unsigned char rcv_crc = 0;
+	
+	FILE *get_fp = fopen(file_name, "w");
+	if(get_fp == NULL){
+		printf("Create file \"%s\" error.\n", file_name);
+		return;
+	}
+	
+	while(1){
+		r_size = recvfrom(fd_udp, &Recv_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, &len);
+		printf("\n");
+		printf("recvfrom r_size:%d\n",r_size);
+		
+		if(r_size > 0 && r_size < 12) //数据包不足12
+		{
+			printf("Bad packet:%d\n",r_size);
+			Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
+			sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&srvaddr, len);
+		}
+		else{
+			printf("Recv_packet.packet_head.ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
 			switch(Recv_packet.packet_head.ex_data[0])
 			{
 				case AST_START_TRAN:  //文件开始传输指令
 					tran_status = 1;
-					total_block = (Recv_packet.packet_head.ex_data[1] << 16) +  
-											(Recv_packet.packet_head.ex_data[2] << 8) + 
-											Recv_packet.packet_head.ex_data[3];
+
 					Send_packet.packet_head.ex_data[0] = AST_REPLY_START_TRAN;
 					sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&srvaddr, len);
 					break;
@@ -903,12 +1007,19 @@ void do_get(void)
 						package_num = (Recv_packet.packet_head.ex_data[1] << 16) +  
 											(Recv_packet.packet_head.ex_data[2] << 8) + 
 											Recv_packet.packet_head.ex_data[3];
+						
+						//记录包的大小
+						data_len = ntohs(Recv_packet.packet_head.data_len);
+						printf("package_num:%d\n",package_num);
+						printf("data_len:%d\n",(unsigned short)data_len);				
 						//数据校验
-						rcv_crc = RX_CheckSum(Recv_packet.data, TRAN_SIZE);
-						if(rcv_crc + Recv_packet.packet_head.ex_data[4] == 0){
+						rcv_crc = RX_CheckSum(Recv_packet.data, data_len);
+						
+						printf("rcv_crc:%#x\n",rcv_crc);
+						if((unsigned char)(rcv_crc + Recv_packet.packet_head.ex_data[4]) == 0){
 							Send_packet.packet_head.ex_data[0] = AST_REPLY_WDATA;
-							sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, len);
-							fwrite(Recv_packet.data, 1, r_size - 12, fp);
+							sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&srvaddr, len);
+							fwrite(Recv_packet.data, 1, r_size - 12, get_fp);
 						}
 						else{
 							perror("checksum error");
@@ -916,30 +1027,32 @@ void do_get(void)
 							Send_packet.packet_head.ex_data[1] = package_num >> 16;
 							Send_packet.packet_head.ex_data[2] = (package_num >> 8) && 0x00FF;
 							Send_packet.packet_head.ex_data[3] = package_num && 0x0000FF;
-							sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, len);
+							sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&srvaddr, len);
 						}
 					}
 					break;
 				
 				case AST_CANCEL_TRAN: //取消数据传输的指令
 					tran_status = 0;
-					fclose(fp);
 					Send_packet.packet_head.ex_data[0] = AST_REPLY_CANCEL_TRAN;
-					sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, len);
+					sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&srvaddr, len);
 					break;
 					
 				case AST_END_TRAN:  //完成数据传输
 					if(tran_status){
-						fclose(fp);
+						
 						Send_packet.packet_head.ex_data[0] = AST_REPLY_END_TRAN;
-						sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, len);
+						sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&srvaddr, len);
 					}
 					break;
 			
 			}
-			if(Recv_packet.packet_head.ex_data[0] == AST_CANCEL_TRAN ||
-					Recv_packet.packet_head.ex_data[0] == AST_END_TRAN)
-					break;
+		}
+		
+		if(Recv_packet.packet_head.ex_data[0] == AST_CANCEL_TRAN || 
+				 Recv_packet.packet_head.ex_data[0] == AST_END_TRAN){
+			fclose(get_fp);
+			break;
 		}
 	}
 }
@@ -1004,9 +1117,7 @@ int main(int argc, char *argv[])
 	char *parse_json_data;
 	int buf_len = 0,login_status = 0;
 	unsigned short crc = 0;
-	
-	//定义一个vector存储每个分割的字符串
-	vector<string> v_Splitstr;
+
 
 	// 绑定地址（IP:PORT）
 	bzero(&srvaddr, len);
@@ -1138,14 +1249,21 @@ int main(int argc, char *argv[])
 					}
 					break;
 			
-				//固件上传
+				//固件上传(✔)
 				case PC_firmware_upload:	
 					if(login_status && !vdata_list.empty()){
 						data_packing_toPC(m_vpcdata[0], Server_return_upload, 200, m_vpcid[0]);
 						m_sdata2PC_bak.assign(m_sdata2PC);
 						sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
-								
-						do_get(); //文件传输	
+						
+						if(v_Splitstr[0] == "TX" && v_Splitstr.size() == 1)	//PC发送的数据为“TX”		
+							do_get(AST_TX_FILE); 
+						else if(v_Splitstr[0] == "RX" && v_Splitstr.size() == 1)  //PC发送的数据为“RX”
+							do_get(AST_RX_FILE); 
+						else{                        //PC发送的数据为“TX,RX”
+							do_get(AST_TX_FILE);
+							do_get(AST_RX_FILE);
+						}
 					}
 					break;
 					
