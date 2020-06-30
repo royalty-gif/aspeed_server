@@ -47,9 +47,9 @@ using namespace std;
 /************文件传输结构体***************/
 #pragma pack(1)
 struct Transfer_packet_head{
-	short check_code = AST_CHECK_CODE;
-	short pro_code = AST_PRO_CODE;
-	short data_len = 0x0000;
+	unsigned short check_code = AST_CHECK_CODE;
+	unsigned short pro_code = AST_PRO_CODE;
+	unsigned short data_len = 0x0000;
 	unsigned char ex_field = AST_EX_FILED;
 	unsigned char ex_data[EX_SIZE]; //操作码（1）+ 块编号（3）+和校验（1）
 };

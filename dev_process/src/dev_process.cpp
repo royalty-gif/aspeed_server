@@ -58,9 +58,10 @@ struct sockaddr_in addr;
 static socklen_t addr_len = sizeof(addr);
 
 /* 和校验：接收方调用,将所有的数据累加之后(溢出丢弃) 加一.返回值 */
-int RX_CheckSum(unsigned char *buf, int len) //buf为数组，len为数组长度
+unsigned char RX_CheckSum(unsigned char *buf, int len) //buf为数组，len为数组长度
 {
-    int i, ret = 0;
+    int i;
+    unsigned char ret = 0;
 
     for(i=0; i<len; i++)
     {
@@ -73,39 +74,42 @@ int RX_CheckSum(unsigned char *buf, int len) //buf为数组，len为数组长度
 
 void do_get(void)
 {
-	static int total_block = 0;  //记录总块数
 	static int package_num = 0;  //每个包编号
-	unsigned char tran_status; //记录传输状态
-	struct Transfer_packet Send_packet,Recv_packet; 
+	char tran_status; //记录传输状态
+	struct Transfer_packet Recv_packet;
+	struct Transfer_packet Send_packet = {AST_CHECK_CODE,AST_PRO_CODE,0x0000,AST_EX_FILED,}; 
+	
+	memcpy(&Recv_packet, &Send_packet, sizeof(struct Transfer_packet));
 	int r_size = 0;
+	unsigned short data_len = 0;
 	unsigned char rcv_crc = 0;
 	
-	FILE *fp = fopen(AST_FILE_NAME, "w");
-	if(fp == NULL){
-		printf("Create file \"%s\" error.\n", AST_FILE_NAME);
+	
+	
+	FILE *get_fp = fopen(AST_TX_FILE, "w");
+	if(get_fp == NULL){
+		printf("Create file \"%s\" error.\n", AST_TX_FILE);
 		return;
 	}
 	
 	while(1){
-		memset(&Send_packet, 0, sizeof(Send_packet));
-		memset(&Recv_packet, 0, sizeof(Recv_packet));
-	
 		r_size = recvfrom(fd, &Recv_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, &addr_len);
+		printf("\n");
+		printf("recvfrom r_size:%d\n",r_size);
+		
 		if(r_size > 0 && r_size < 12) //数据包不足12
 		{
 			printf("Bad packet:%d\n",r_size);
 			Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
-			sendto(fd, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, addr_len);
+			sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
 		}
 		else{
-		
+			printf("Recv_packet.packet_head.ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
 			switch(Recv_packet.packet_head.ex_data[0])
 			{
 				case AST_START_TRAN:  //文件开始传输指令
 					tran_status = 1;
-					total_block = (Recv_packet.packet_head.ex_data[1] << 16) +  
-											(Recv_packet.packet_head.ex_data[2] << 8) + 
-											Recv_packet.packet_head.ex_data[3];
+
 					Send_packet.packet_head.ex_data[0] = AST_REPLY_START_TRAN;
 					sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
 					break;
@@ -117,44 +121,53 @@ void do_get(void)
 						package_num = (Recv_packet.packet_head.ex_data[1] << 16) +  
 											(Recv_packet.packet_head.ex_data[2] << 8) + 
 											Recv_packet.packet_head.ex_data[3];
+						
+						//记录包的大小
+						data_len = ntohs(Recv_packet.packet_head.data_len);
+						printf("package_num:%d\n",package_num);
+						printf("data_len:%d\n",(unsigned short)data_len);				
 						//数据校验
-						rcv_crc = RX_CheckSum(Recv_packet.data, TRAN_SIZE);
-						if(rcv_crc + Recv_packet.packet_head.ex_data[4] == 0){
+						rcv_crc = RX_CheckSum(Recv_packet.data, data_len);
+						
+						printf("rcv_crc:%#x\n",rcv_crc);
+						if((unsigned char)(rcv_crc + Recv_packet.packet_head.ex_data[4]) == 0){
 							Send_packet.packet_head.ex_data[0] = AST_REPLY_WDATA;
-							sendto(fd, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, addr_len);
-							fwrite(Recv_packet.data, 1, r_size - 12, fp);
+							sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
+							fwrite(Recv_packet.data, 1, r_size - 12, get_fp);
 						}
 						else{
 							perror("checksum error");
 							Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
 							Send_packet.packet_head.ex_data[1] = package_num >> 16;
-							Send_packet.packet_head.ex_data[2] = (package_num >> 8) && 0x00FF;
-							Send_packet.packet_head.ex_data[3] = package_num && 0x0000FF;
-							sendto(fd, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, addr_len);
+							Send_packet.packet_head.ex_data[2] = (package_num >> 8) & 0x00FF;
+							Send_packet.packet_head.ex_data[3] = package_num & 0x0000FF;
+							sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
 						}
 					}
 					break;
 				
 				case AST_CANCEL_TRAN: //取消数据传输的指令
 					tran_status = 0;
-					fclose(fp);
+					remove(AST_TX_FILE);
 					Send_packet.packet_head.ex_data[0] = AST_REPLY_CANCEL_TRAN;
-					sendto(fd, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, addr_len);
+					sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
 					break;
 					
 				case AST_END_TRAN:  //完成数据传输
 					if(tran_status){
-						fclose(fp);
+						
 						Send_packet.packet_head.ex_data[0] = AST_REPLY_END_TRAN;
-						sendto(fd, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, addr_len);
+						sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
 					}
 					break;
+			
 			}
-			
-			if(Recv_packet.packet_head.ex_data[0] == AST_CANCEL_TRAN ||
-					Recv_packet.packet_head.ex_data[0] == AST_END_TRAN)
-					break;
-			
+		}
+		
+		if(Recv_packet.packet_head.ex_data[0] == AST_CANCEL_TRAN || 
+				 Recv_packet.packet_head.ex_data[0] == AST_END_TRAN){
+			fclose(get_fp);
+			break;
 		}
 	}
 }

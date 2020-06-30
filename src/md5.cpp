@@ -216,7 +216,7 @@ int Compute_string_md5(unsigned char *dest_str, unsigned int dest_len, char *md5
  * @param  md5_str
  * @return 0: ok, -1: fail
  */
-int Compute_file_md5(const char *file_path, char *md5_str)
+int Compute_file_md5(const char *file_path, string& md5_data)
 {
 	int i;
 	int fd;
@@ -224,6 +224,7 @@ int Compute_file_md5(const char *file_path, char *md5_str)
 	unsigned char data[READ_DATA_SIZE];
 	unsigned char md5_value[MD5_SIZE];
 	MD5_CTX md5;
+	char md5_str[20];
 
 	fd = open(file_path, O_RDONLY);
 	if (-1 == fd)
@@ -262,7 +263,7 @@ int Compute_file_md5(const char *file_path, char *md5_str)
 	{
 		snprintf(md5_str + i*2, 2+1, "%02x", md5_value[i]);
 	}
-
+	md5_data = md5_str;
 	return 0;
 }
 

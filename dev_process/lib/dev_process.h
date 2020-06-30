@@ -13,10 +13,11 @@
 #define AST_DEV_PROCESS_PORT "50020"
 #define AST_JSON_MAX_SIZE 1024
 
-#define AST_FILE_NAME (char *)"file.tar.gz"
+#define AST_TX_FILE (char *)"TX.bin"
+#define AST_RX_FILE (char *)"RX.bin"
 
-#define AST_CHECK_CODE 0x424c  //ASCII码 BL
-#define AST_PRO_CODE 0x138d    //项目代号 5005
+#define AST_CHECK_CODE 0x4c42  //ASCII码 BL
+#define AST_PRO_CODE 0x8d13    //项目代号 5005
 #define AST_EX_FILED 0x05      //扩展字段，此处扩展5字节
 
 //文件传输操作码定义
@@ -40,14 +41,16 @@
 using namespace std;
 
 /************文件传输结构体***************/
+#pragma pack(1)
 struct Transfer_packet_head{
-	short check_code = AST_CHECK_CODE;
-	short pro_code = AST_PRO_CODE;
-	short data_len = 0x00;
-	unsigned char ex_field = AST_EX_FILED;
+	unsigned short check_codeE;
+	unsigned short pro_code;
+	unsigned short data_len;
+	unsigned char ex_field;
 	unsigned char ex_data[EX_SIZE]; //操作码（1）+ 块编号（3）+和校验（1）
 };
 
+#pragma pack(1)
 struct Transfer_packet{
 	Transfer_packet_head packet_head;
 	unsigned char data[TRAN_SIZE];
