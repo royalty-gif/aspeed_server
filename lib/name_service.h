@@ -35,9 +35,17 @@
 #define AST_CANCEL_TRAN 0x05
 #define AST_REPLY_CANCEL_TRAN 0x50
 
-#define AST_DATE_SIZE 512
 #define EX_SIZE 5
 #define TRAN_SIZE 512
+
+// Max packet retransmission.
+#define PKT_MAX_RXMT 3
+
+//usecond
+#define PKT_RCV_TIMEOUT 3*1000*1000
+// usecond
+#define PKT_TIME_INTERVAL 5*1000
+
 
 #include <iostream>
 #include <string>

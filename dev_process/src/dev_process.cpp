@@ -33,6 +33,9 @@
 using namespace std;
 using namespace rapidjson;
 
+//判断是否为TX
+bool isTX;
+
 //记录灯的状态变量
 static int led_status = 0;
 
@@ -79,17 +82,25 @@ void do_get(void)
 	struct Transfer_packet Recv_packet;
 	struct Transfer_packet Send_packet = {AST_CHECK_CODE,AST_PRO_CODE,0x0000,AST_EX_FILED,}; 
 	
+	FILE *get_fp = NULL;
 	memcpy(&Recv_packet, &Send_packet, sizeof(struct Transfer_packet));
 	int r_size = 0;
 	unsigned short data_len = 0;
 	unsigned char rcv_crc = 0;
 	
-	
-	
-	FILE *get_fp = fopen(AST_TX_FILE, "w");
-	if(get_fp == NULL){
-		printf("Create file \"%s\" error.\n", AST_TX_FILE);
-		return;
+	if(isTX){
+		get_fp = fopen(AST_TX_FILE, "w");
+		if(get_fp == NULL){
+			printf("Create file \"%s\" error.\n", AST_TX_FILE);
+			return;
+		}
+	}
+	else{
+		get_fp = fopen(AST_RX_FILE, "w");
+		if(get_fp == NULL){
+			printf("Create file \"%s\" error.\n", AST_RX_FILE);
+			return;
+		}
 	}
 	
 	while(1){
@@ -343,6 +354,18 @@ int main(int argc, char*argv[])
 	
 	char recv_json[512];
 	char *parse_json_data;
+	
+	if(argc != 2)
+	{
+		printf("usage: ./dev_process TX/RX!\n");
+		return 0;
+	}
+	
+	if(!strncmp(argv[1], "TX", 2))
+		isTX = 1;
+	else
+		isTX = 0;
+    printf("argv[1]:%s\n",argv[1]);
 	//UDP连接
 	fd = Socket(AF_INET, SOCK_DGRAM, 0);
 	

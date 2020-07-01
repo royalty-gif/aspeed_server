@@ -35,10 +35,10 @@ using namespace std;
 using namespace rapidjson;
 
 //升级状态的相关变量
-int package_number = 0;  //数据包编号
+int m_size = 0; //传输的大小
 string m_mac; //记录升级的设备mac地址
-int m_size = 0;   //记录文件大小
-int m_flag = 0;   //结束标志
+int m_stflag = 0;   //状态标志
+int m_endflag = 0;   //结束标志
 
 //定义一个vector存储每个分割的字符串
 vector<string> v_Splitstr;
@@ -350,13 +350,18 @@ int get_file_size(FILE * file_handle)
 
 void do_put(char *file_name)
 {
-	
+	static int package_number = 0;  //数据包编号
 	unsigned int size = 0; //记录文件大小
+	int time_wait_ack;
+	int rxmt;
 	
 	int r_size = 0;
 	unsigned short s_size = 0;
 	
+	
 	struct Transfer_packet Send_packet,Recv_packet; 
+	struct Transfer_packet Send_packet_bak;
+	unsigned short size_bak;
 	
 	FILE *put_fp = fopen(file_name, "r");
 	if(put_fp == NULL){
@@ -365,26 +370,47 @@ void do_put(char *file_name)
 	}
 	
 	size = get_file_size(put_fp);
-	m_size = size;  //将文件大小保存
 	if(size % 512)   //查看是否整除
 		size = (size >> 9) + 1;
 	else
 		size = (size >> 9);
+		
 	
 	//发送 文件开始传输包
 	Send_packet.packet_head.ex_data[0] = AST_START_TRAN;  
 	Send_packet.packet_head.ex_data[1] = size >> 16;
 	Send_packet.packet_head.ex_data[2] = (size >> 8) && 0x00FF;
 	Send_packet.packet_head.ex_data[3] = size && 0x0000FF;
+	
+	size_bak = sizeof(struct Transfer_packet_head);
+	memcpy(&Send_packet_bak, &Send_packet, size_bak);
 	sendto(dev_fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
 	
 	while(1)
 	{
-		r_size = recvfrom(dev_fd, &Recv_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&pdev_addr, &pdevaddr_len);
-		printf("recvfrom r_size:%d\n",r_size);
-		printf("crc:%#x\n",Recv_packet.packet_head.ex_data[4]);
-		
-		printf("ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
+		for(rxmt = 0; rxmt < PKT_MAX_RXMT; rxmt++){  //最大次数3
+			
+			//等待响应
+			for(time_wait_ack = 0; time_wait_ack < PKT_RCV_TIMEOUT; time_wait_ack += 20000){  
+				r_size = recvfrom(dev_fd, &Recv_packet, sizeof(struct Transfer_packet_head), MSG_DONTWAIT, (struct sockaddr *)&pdev_addr, &pdevaddr_len);
+				printf("recvfrom r_size:%d\n",r_size);
+				printf("crc:%#x\n",Recv_packet.packet_head.ex_data[4]);
+				
+				printf("ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
+				if(r_size == 12)
+					break;
+				usleep(20000);
+			}
+			
+			if(time_wait_ack < PKT_RCV_TIMEOUT){
+				// Send success.
+				break;
+			}else{
+				// Retransmission.
+				sendto(dev_fd, &Send_packet_bak, size_bak, 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
+				continue;
+			}
+		}
 		switch(Recv_packet.packet_head.ex_data[0])
 		{
 			case AST_REPLY_START_TRAN:
@@ -402,17 +428,24 @@ void do_put(char *file_name)
 				
 				Send_packet.packet_head.ex_data[4] = TX_CheckSum(Send_packet.data, s_size);
 				
-				sendto(dev_fd, &Send_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
+				size_bak = s_size+12;
+				memcpy(&Send_packet_bak, &Send_packet, size_bak);
+				sendto(dev_fd, &Send_packet, s_size+12, 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
+				m_size += s_size;
 				break;
 				
 			case AST_REPLY_WDATA:
 				
 				memset(Send_packet.data, 0, TRAN_SIZE); //清空数据
-				
+				m_stflag = 1;
+				raise(SIGUSR1);
 				if(package_number != size){
 					++package_number;
 					s_size = fread(Send_packet.data, 1, TRAN_SIZE, put_fp);
 					
+					printf("package_number:%d\n",package_number);
+					printf("size:%d\n",size);
+					printf("s_size:%d\n",s_size);
 					Send_packet.packet_head.data_len = htons(s_size); 
 					Send_packet.packet_head.ex_data[0] = AST_WDATA;
 					Send_packet.packet_head.ex_data[1] = (package_number >> 16);
@@ -420,13 +453,23 @@ void do_put(char *file_name)
 					Send_packet.packet_head.ex_data[3] = (package_number & 0x000000FF);
 					
 					Send_packet.packet_head.ex_data[4] = TX_CheckSum(Send_packet.data, s_size);
-					
+						
+					size_bak = s_size+12;
+					memcpy(&Send_packet_bak, &Send_packet, size_bak);
 					sendto(dev_fd, &Send_packet, s_size+12, 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
+					//usleep(10000);
+					m_size += s_size;
 				}
 				else{  //传输完成了
 					memset(Send_packet.packet_head.ex_data, 0, EX_SIZE); //清空数据
 					memset(&Send_packet.packet_head.data_len, 0, EX_SIZE);
 					
+					m_endflag = 1;
+					m_size = 0;
+					raise(SIGUSR1);
+					
+					size_bak = sizeof(struct Transfer_packet_head);
+					memcpy(&Send_packet_bak, &Send_packet, size_bak);
 					Send_packet.packet_head.ex_data[0] = AST_END_TRAN;
 					sendto(dev_fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);	
 				}
@@ -468,14 +511,14 @@ void Srv2dev_query(int Server_actioncode)
 {
 	
 	int cycle,mac_cycle; //用于循环连接设备
-	string dev_data,mac_str; //用于对数据进行处理
+	string dev_data_query,mac_str; //用于对数据进行处理
 	static vector<string> v_deal_ip;  //储存需要升级的设备mac地址对应的ip和mac
 	static vector<string> v_deal_mac;
 	static vector<char> v_deal_type; //存储类型
 	
 	int ret = -1;
 	
-	dev_data.clear();
+	dev_data_query.clear();
 	
 	//UDP连接
 	dev_fd = Socket(AF_INET, SOCK_DGRAM, 0);
@@ -523,15 +566,19 @@ void Srv2dev_query(int Server_actioncode)
 				sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
 				dev2srv_json_check();
 				
+				cout << "v_Splitstr[mac_cycle].at(0)" << v_Splitstr[mac_cycle].at(0) << endl;
 				if(v_Splitstr[mac_cycle].at(0) == 'T')  //比较TX文件
-				{
+				{	
+					printf("wwwwwwwwwwwwww\n");
+					cout << "tx_md5_str:" << tx_md5_str << endl;
+					cout << "m_vdevdata[0]:" << m_vdevdata[0] << endl;
 					if(m_vdevdata[0] == tx_md5_str)
 					{
-						dev_data += "N" + vmac_ip[cycle][0] + ",";
+						dev_data_query += "N" + vmac_ip[cycle][0] + ",";
 					}
 					else
 					{
-						dev_data += "Y" + vmac_ip[cycle][0] + ",";
+						dev_data_query += "Y" + vmac_ip[cycle][0] + ",";
 						v_deal_ip.push_back(vmac_ip[cycle][1]);//将信息存储
 						v_deal_mac.push_back(vmac_ip[cycle][0]);
 						v_deal_type.push_back('T');
@@ -541,11 +588,11 @@ void Srv2dev_query(int Server_actioncode)
 				{
 					if(m_vdevdata[0] == rx_md5_str)
 					{
-						dev_data += "N" + vmac_ip[cycle][0] + ",";
+						dev_data_query += "N" + vmac_ip[cycle][0] + ",";
 					}
 					else
 					{
-						dev_data += "Y" + vmac_ip[cycle][0] + ","; 
+						dev_data_query += "Y" + vmac_ip[cycle][0] + ","; 
 						v_deal_ip.push_back(vmac_ip[cycle][1]);//将信息存储
 						v_deal_mac.push_back(vmac_ip[cycle][0]);
 						v_deal_type.push_back('R');
@@ -554,13 +601,14 @@ void Srv2dev_query(int Server_actioncode)
 				usleep(20000);
 			}
 			
-			dev_data.pop_back();
-			m_vpcdata[0] = dev_data;  //返回给PC
-			printf("dev_data:%s\n",dev_data.c_str());
+			dev_data_query.pop_back();
+			m_vpcdata.push_back(dev_data_query);  //返回给PC
+			printf("dev_data_query:%s\n",dev_data_query.c_str());
 			break;
 			
 		case Server_start_file_tran:  //服务器开始固件传输
 		
+			cout << "v_deal_ip.size(): " << v_deal_ip.size() << endl;
 			for(cycle = 0; cycle < v_deal_ip.size(); cycle++)
 			{
 				printf("Server_start_file_tran\n");
@@ -579,13 +627,18 @@ void Srv2dev_query(int Server_actioncode)
 					do_put(AST_RX_FILE);
 				
 				//发送升级设备命令
-				data_packing_todev(Server_update_device, 0, "", message_timeid()); 
-				m_sdata2dev_bak.assign(m_sdata2dev);
-				sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
-				dev2srv_json_check();	
+				//data_packing_todev(Server_update_device, 0, "", message_timeid()); 
+				//m_sdata2dev_bak.assign(m_sdata2dev);
+				//sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
+				//dev2srv_json_check();	
+				
 				
 				usleep(20000);
 			}
+			
+			v_deal_ip.clear();   //结束时全部清空
+			v_deal_type.clear();
+			v_deal_mac.clear();
 			break;
 
 		case Server_write_md5Value:  //发送写md5的命令
@@ -1175,59 +1228,55 @@ void catch_sig(int sig)
 	
 	printf("catch_sig\n");
 	
+	memset(sig_json, 0, 512);
+	//m_vpccode.clear();
+	//m_vpcid.clear();
+	//m_vpcdata.clear();
+	sig_str.clear();	
 	
-	while(1)
-	{
-		memset(sig_json, 0, 512);
-		m_vpccode.clear();
-		m_vpcid.clear();
-		m_vpcdata.clear();
-		sig_str.clear();	
-		
-		while((package_number % 2048) || (m_size == package_number) || (m_size < 2048));  //编号到2048的倍数、到达结束时、不足2048
 	
-		if(package_number % 2048){
-			sig_str = m_mac + "," + "2048";
-			data_packing_toPC(sig_str, Server_return_update_status, 200, message_timeid());
-			sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
-		}
-		if((m_size == package_number) || (m_size < 2048)){
-			sig_str = m_mac;
-			data_packing_toPC(sig_str, Server_return_update_end, 200, message_timeid());
-			sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
-		}
-		
-		sig_len = recvfrom(fd_udp, sig_json, sizeof(sig_json), 0, (struct sockaddr *)&srvaddr, &len);	
-
-		printf("sig_len:%d\n",sig_len);
-	
-		sig_parse = (char *)malloc(sig_len);
-		memset(sig_parse, 0, sig_len);
-		strncpy(sig_parse, sig_json, sig_len-3);
-		parse_json(sig_parse);
-		
-		switch(m_vpccode[0])
-		{
-			case PC_cancel_update:
-				on = 0;
-				ret = ioctl(fd_udp, FIOASYNC, &on);  //工作在异步模式
-				if(ret < 0)
-				{
-					perror("ioctl error\n");
-					exit(-1);
-				}
-				goto cancel_sig;
-			
-			case PC_reply_update_status:
-				
-				break;
-		}
-		
-		free(sig_parse);
+	if(m_stflag){  //传输状态
+		m_stflag = 0;
+		sig_str = m_mac + "," + to_string(m_size);
+		data_packing_toPC(sig_str, Server_return_update_status, 200, message_timeid());
+		sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
 	}
+	
+	if(m_endflag){
+		m_endflag = 0;
+		sig_str = m_mac;
+		m_size = 0;
+		data_packing_toPC(sig_str, Server_return_update_end, 200, message_timeid());
+		sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
+	}
+	sig_len = recvfrom(fd_udp, sig_json, sizeof(sig_json), 0, (struct sockaddr *)&srvaddr, &len);	
 
-cancel_sig:
-	free(sig_parse);	
+	printf("sig_len:%d\n",sig_len);
+
+	sig_parse = (char *)malloc(sig_len);
+	memset(sig_parse, 0, sig_len);
+	strncpy(sig_parse, sig_json, sig_len-3);
+	parse_json(sig_parse);
+	
+	switch(m_vpccode[0])
+	{
+		case PC_cancel_update:
+			on = 0;
+			ret = ioctl(fd_udp, FIOASYNC, &on);  //工作在异步模式
+			if(ret < 0)
+			{
+				perror("ioctl error\n");
+				exit(-1);
+			}
+			break;
+		
+		case PC_reply_update_status:
+			
+			break;
+	}
+	
+	free(sig_parse);
+
 }
 
 int main(int argc, char *argv[])
@@ -1262,13 +1311,7 @@ int main(int argc, char *argv[])
 	Bind(fd_udp, (struct sockaddr *)&srvaddr, len);
 
 	//信号相关操作
-	signal(SIGIO, catch_sig);   //注册信号
-	ret = fcntl(fd_udp, F_SETOWN, getpid()); //设置SIGIO的属主
-	if(ret < 0)  
-	{
-		perror("fcntl error!\n");
-		exit(-1);
-	}
+	signal(SIGUSR1, catch_sig);   //注册信号
 
 	while(1)
 	{
@@ -1358,30 +1401,22 @@ int main(int argc, char *argv[])
 				case PC_update_device:
 				
 					if(login_status && !vdata_list.empty()){
-						on = 1;  //开启信号机制
-						ret = ioctl(fd_udp, FIOASYNC, &on);  //工作在异步模式
-						if(ret < 0)
-						{
-							perror("ioctl error\n");
-							exit(-1);
-						}
+					
+						//操作1：校验文件的MD5值，向设备获取MD5值,比较后一致，不升级，反之发送指令升级
+						Srv2dev_query(Server_get_md5value);
+					
+						//发送给PC需要升级的设备MAC地址
+						data_packing_toPC(m_vpcdata[0], Server_return_update, 200, m_vpcid[0]);
+						m_sdata2PC_bak.assign(m_sdata2PC);
+						sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
 						
-						while(on)
-						{
-							//操作1：校验文件的MD5值，向设备获取MD5值,比较后一致，不升级，反之发送指令升级
-							Srv2dev_query(Server_get_md5value);
+						//操作2：开始文件传输 PC ← Server ↔ Dev ，并升级设备
+						Srv2dev_query(Server_start_file_tran);
 						
-							//发送给PC需要升级的设备MAC地址
-							data_packing_toPC(m_vpcdata[0], Server_return_update, 200, m_vpcid[0]);
-							m_sdata2PC_bak.assign(m_sdata2PC);
-							sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
-							
-							//操作2：开始文件传输 PC ← Server ↔ Dev ，并升级设备
-							Srv2dev_query(Server_start_file_tran);
-							
-							//操作3：写入MD5值
-							
-						}	
+						//操作3：写入MD5值
+						
+						
+						
 					}
 					break;
 			
