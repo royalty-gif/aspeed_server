@@ -78,9 +78,12 @@ unsigned char RX_CheckSum(unsigned char *buf, int len) //buf为数组，len为�
 void do_get(void)
 {
 	static int package_num = 0;  //每个包编号
+	int tmp_packnum = 0;
+	
 	char tran_status; //记录传输状态
+	int time_wait_data;
 	struct Transfer_packet Recv_packet;
-	struct Transfer_packet Send_packet = {AST_CHECK_CODE,AST_PRO_CODE,0x0000,AST_EX_FILED,}; 
+	struct Transfer_packet Send_packet = {AST_CHECK_CODE,AST_PRO_CODE,0x0000,AST_EX_FILED,};
 	
 	FILE *get_fp = NULL;
 	memcpy(&Recv_packet, &Send_packet, sizeof(struct Transfer_packet));
@@ -104,15 +107,30 @@ void do_get(void)
 	}
 	
 	while(1){
-		r_size = recvfrom(fd, &Recv_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, &addr_len);
-		printf("\n");
-		printf("recvfrom r_size:%d\n",r_size);
+		for(time_wait_data = 0; time_wait_data < PKT_RCV_TIMEOUT * PKT_MAX_RXMT; time_wait_data += 10000){  //等待响应
+			r_size = recvfrom(fd, &Recv_packet, sizeof(struct Transfer_packet), MSG_DONTWAIT, (struct sockaddr *)&addr, &addr_len);
+			
+			if(r_size > 0 && r_size < 12) //数据包不足12
+			{
+				printf("Bad packet:%d\n",r_size);
+				Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
+				sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
+			}
+			
+			if(r_size >= 12)
+			{
+				printf("\n");
+				printf("recvfrom r_size:%d\n",r_size);
+				break;
+			}
+			
+			usleep(10000);
+		}
 		
-		if(r_size > 0 && r_size < 12) //数据包不足12
-		{
-			printf("Bad packet:%d\n",r_size);
-			Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
-			sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
+		if(time_wait_data >= PKT_RCV_TIMEOUT * PKT_MAX_RXMT){  //超时退出
+			printf("Wait for DATA timeout.\n");
+			fclose(get_fp);
+			return;
 		}
 		else{
 			printf("Recv_packet.packet_head.ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
@@ -129,22 +147,29 @@ void do_get(void)
 					if(tran_status)
 					{
 						//记录包的编号
-						package_num = (Recv_packet.packet_head.ex_data[1] << 16) +  
+						tmp_packnum = (Recv_packet.packet_head.ex_data[1] << 16) +  
 											(Recv_packet.packet_head.ex_data[2] << 8) + 
 											Recv_packet.packet_head.ex_data[3];
 						
 						//记录包的大小
 						data_len = ntohs(Recv_packet.packet_head.data_len);
-						printf("package_num:%d\n",package_num);
+						printf("tmp_packnum:%d\n",tmp_packnum);
 						printf("data_len:%d\n",(unsigned short)data_len);				
 						//数据校验
 						rcv_crc = RX_CheckSum(Recv_packet.data, data_len);
 						
 						printf("rcv_crc:%#x\n",rcv_crc);
 						if((unsigned char)(rcv_crc + Recv_packet.packet_head.ex_data[4]) == 0){
+						
+							if(tmp_packnum != package_num){  //判断是否为同一个包
+								fwrite(Recv_packet.data, 1, r_size - 12, get_fp);
+								package_num = tmp_packnum;
+							}
+							
 							Send_packet.packet_head.ex_data[0] = AST_REPLY_WDATA;
 							sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
-							fwrite(Recv_packet.data, 1, r_size - 12, get_fp);
+							
+							
 						}
 						else{
 							perror("checksum error");
@@ -448,7 +473,7 @@ int main(int argc, char*argv[])
 					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
 					
 					//升级过程
-					
+					system("./update.sh > /dev/shm/uf 2>/dev/shm/uf_e");
 					//设备升级完成
 					data_packing_toSrv(Dev_update_end, 200, m_vsrvid[0]);
 					m_sdata2Srv_bak.assign(m_sdata2Srv);

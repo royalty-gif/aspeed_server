@@ -40,6 +40,10 @@ string m_mac; //记录升级的设备mac地址
 int m_stflag = 0;   //状态标志
 int m_endflag = 0;   //结束标志
 
+int tmp_number = 0;  //临时测试变量
+int tmp_size = 0;
+vector<int> m_tmp;
+
 //定义一个vector存储每个分割的字符串
 vector<string> v_Splitstr;
 
@@ -393,10 +397,7 @@ void do_put(char *file_name)
 			//等待响应
 			for(time_wait_ack = 0; time_wait_ack < PKT_RCV_TIMEOUT; time_wait_ack += 20000){  
 				r_size = recvfrom(dev_fd, &Recv_packet, sizeof(struct Transfer_packet_head), MSG_DONTWAIT, (struct sockaddr *)&pdev_addr, &pdevaddr_len);
-				printf("recvfrom r_size:%d\n",r_size);
-				printf("crc:%#x\n",Recv_packet.packet_head.ex_data[4]);
 				
-				printf("ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
 				if(r_size == 12)
 					break;
 				usleep(20000);
@@ -404,10 +405,20 @@ void do_put(char *file_name)
 			
 			if(time_wait_ack < PKT_RCV_TIMEOUT){
 				// Send success.
+				printf("recvfrom r_size:%d\n",r_size);
+				printf("crc:%#x\n",Recv_packet.packet_head.ex_data[4]);
+				
+				printf("ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
 				break;
 			}else{
 				// Retransmission.
+				
 				sendto(dev_fd, &Send_packet_bak, size_bak, 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
+				
+				++tmp_number;
+				tmp_size += size_bak;
+				m_tmp.push_back(size_bak);
+				
 				continue;
 			}
 		}
@@ -439,6 +450,7 @@ void do_put(char *file_name)
 				memset(Send_packet.data, 0, TRAN_SIZE); //清空数据
 				m_stflag = 1;
 				raise(SIGUSR1);
+				printf("\n");
 				if(package_number != size){
 					++package_number;
 					s_size = fread(Send_packet.data, 1, TRAN_SIZE, put_fp);
@@ -477,12 +489,17 @@ void do_put(char *file_name)
 				
 			case AST_REPLY_END_TRAN:
 				package_number = 0;
-				fseek(put_fp, 0, SEEK_SET);
+				fseek(put_fp, 0L, SEEK_SET);
+				printf("tmp_number:%d\n",tmp_number);
+				printf("tmp_size:%d\n",tmp_size);
+				
+				for(int i = 0; i<m_tmp.size(); i++)
+					cout << "m_tmp: " << m_tmp[i] << endl;
 				break;
 				
 			case AST_REPLY_CANCEL_TRAN:
 				package_number = 0;
-				fseek(put_fp, 0, SEEK_SET);
+				fseek(put_fp, 0L, SEEK_SET);
 				break;
 				
 			case AST_CHECK_FAILED:
@@ -1125,6 +1142,9 @@ void data_packing_toPC(string pc_data, int user_actioncode, int result, int msg_
 void do_get(char *file_name)
 {
 	static int package_num = 0;  //每个包编号
+	int tmp_packnum = 0;
+	
+	int time_wait_data = 0; //响应时间
 	char tran_status; //记录传输状态
 	struct Transfer_packet Send_packet,Recv_packet; 
 	int r_size = 0;
@@ -1138,15 +1158,31 @@ void do_get(char *file_name)
 	}
 	
 	while(1){
-		r_size = recvfrom(fd_udp, &Recv_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, &len);
-		printf("\n");
-		printf("recvfrom r_size:%d\n",r_size);
+	
+		for(time_wait_data = 0; time_wait_data < PKT_RCV_TIMEOUT * PKT_MAX_RXMT; time_wait_data += 10000){  //响应时间
+			r_size = recvfrom(fd_udp, &Recv_packet, sizeof(struct Transfer_packet), MSG_DONTWAIT, (struct sockaddr *)&srvaddr, &len); //无阻塞
+			
+			if(r_size > 0 && r_size < 12) //数据包不足12
+			{
+				printf("Bad packet:%d\n",r_size);
+				Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
+				sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&srvaddr, len);
+			}
+			
+			if(r_size >= 12)
+			{
+				printf("\n");
+				printf("recvfrom r_size:%d\n",r_size);
+				break;
+			}
+			
+			usleep(10000);
+		}
 		
-		if(r_size > 0 && r_size < 12) //数据包不足12
-		{
-			printf("Bad packet:%d\n",r_size);
-			Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
-			sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&srvaddr, len);
+		if(time_wait_data >= PKT_RCV_TIMEOUT * PKT_MAX_RXMT){  //超时退出
+			printf("Wait for DATA timeout.\n");
+			fclose(get_fp);
+			return;
 		}
 		else{
 			printf("Recv_packet.packet_head.ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
@@ -1176,9 +1212,15 @@ void do_get(char *file_name)
 						
 						printf("rcv_crc:%#x\n",rcv_crc);
 						if((unsigned char)(rcv_crc + Recv_packet.packet_head.ex_data[4]) == 0){
+						
+							if(tmp_packnum != package_num){  //判断是否为同一个包
+									fwrite(Recv_packet.data, 1, r_size - 12, get_fp);
+									package_num = tmp_packnum;
+							}
+							
 							Send_packet.packet_head.ex_data[0] = AST_REPLY_WDATA;
 							sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&srvaddr, len);
-							fwrite(Recv_packet.data, 1, r_size - 12, get_fp);
+							
 						}
 						else{
 							perror("checksum error");

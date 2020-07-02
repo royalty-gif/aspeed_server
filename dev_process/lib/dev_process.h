@@ -13,8 +13,8 @@
 #define AST_DEV_PROCESS_PORT "50020"
 #define AST_JSON_MAX_SIZE 1024
 
-#define AST_TX_FILE (char *)"TX.bin"
-#define AST_RX_FILE (char *)"RX.bin"
+#define AST_TX_FILE (char *)"fw.tar.gz"
+#define AST_RX_FILE (char *)"fw.tar.gz"
 
 #define AST_CHECK_CODE 0x4c42  //ASCII码 BL
 #define AST_PRO_CODE 0x8d13    //项目代号 5005
@@ -31,9 +31,16 @@
 #define AST_CANCEL_TRAN 0x05
 #define AST_REPLY_CANCEL_TRAN 0x50
 
-#define AST_DATE_SIZE 512
 #define EX_SIZE 5
 #define TRAN_SIZE 512
+
+// Max packet retransmission.
+#define PKT_MAX_RXMT 3
+
+//usecond
+#define PKT_RCV_TIMEOUT 3*1000*1000
+// usecond
+#define PKT_TIME_INTERVAL 5*1000
 
 #include <iostream>
 #include <string>
