@@ -13,8 +13,7 @@
 #define AST_DEV_PROCESS_PORT "50020"
 #define AST_JSON_MAX_SIZE 1024
 
-#define AST_TX_FILE (char *)"fw.tar.gz"
-#define AST_RX_FILE (char *)"fw.tar.gz"
+#define AST_FILE_NAME (char *)"/dev/shm/fw.tar.gz"
 
 #define AST_CHECK_CODE 0x4c42  //ASCII码 BL
 #define AST_PRO_CODE 0x8d13    //项目代号 5005

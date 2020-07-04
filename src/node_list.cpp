@@ -328,8 +328,19 @@ void dev2srv_json_check(void)
 				sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
 				continue;
 			}
-		}	
-		if(m_vdevres[0] == 200 || m_vdevres[0] == 100 )
+		}
+		
+		if(m_vdevcode[0] == Dev_update_start){  //返回的是响应更新开始，则继续
+			printf("Dev_update_start!!!\n");
+			continue;
+		}
+		
+		if(m_vdevcode[0] == COMMAND_REFUSE){
+			sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
+			break;
+		}
+		
+		if(m_vdevres[0] == 200 || m_vdevres[0] == 100)
 			break;
 	}	
 	free(dev_parse);
@@ -405,10 +416,10 @@ void do_put(char *file_name)
 			
 			if(time_wait_ack < PKT_RCV_TIMEOUT){
 				// Send success.
-				printf("recvfrom r_size:%d\n",r_size);
-				printf("crc:%#x\n",Recv_packet.packet_head.ex_data[4]);
+				//printf("recvfrom r_size:%d\n",r_size);
+				//printf("crc:%#x\n",Recv_packet.packet_head.ex_data[4]);
 				
-				printf("ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
+				//printf("ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
 				break;
 			}else{
 				// Retransmission.
@@ -450,14 +461,14 @@ void do_put(char *file_name)
 				memset(Send_packet.data, 0, TRAN_SIZE); //清空数据
 				m_stflag = 1;
 				raise(SIGUSR1);
-				printf("\n");
+				//printf("\n");
 				if(package_number != size){
 					++package_number;
 					s_size = fread(Send_packet.data, 1, TRAN_SIZE, put_fp);
 					
 					printf("package_number:%d\n",package_number);
-					printf("size:%d\n",size);
-					printf("s_size:%d\n",s_size);
+					//printf("size:%d\n",size);
+					//printf("s_size:%d\n",s_size);
 					Send_packet.packet_head.data_len = htons(s_size); 
 					Send_packet.packet_head.ex_data[0] = AST_WDATA;
 					Send_packet.packet_head.ex_data[1] = (package_number >> 16);
@@ -476,10 +487,8 @@ void do_put(char *file_name)
 					memset(Send_packet.packet_head.ex_data, 0, EX_SIZE); //清空数据
 					memset(&Send_packet.packet_head.data_len, 0, EX_SIZE);
 					
-					m_endflag = 1;
 					m_size = 0;
-					raise(SIGUSR1);
-					
+
 					size_bak = sizeof(struct Transfer_packet_head);
 					memcpy(&Send_packet_bak, &Send_packet, size_bak);
 					Send_packet.packet_head.ex_data[0] = AST_END_TRAN;
@@ -551,14 +560,14 @@ void Srv2dev_query(int Server_actioncode)
 			//操作：向设备获取MD5值,比较后一致，不升级，反之发送指令升级
 			//建立每台设备的连接,并获取md5值
 			m_vpcdata.clear();
-			ret = Compute_file_md5(AST_TX_FILE, tx_md5_str); //
+			ret = Compute_file_md5(AST_TX_FILE, tx_md5_str); //TX
 			if (0 == ret)
 			{
 				printf("[file - %s] TX md5 value:\n", AST_TX_FILE);
 				cout << "tx_md5_str:" << tx_md5_str << endl;
 			}
 			
-			ret = Compute_file_md5(AST_RX_FILE, rx_md5_str);
+			ret = Compute_file_md5(AST_RX_FILE, rx_md5_str);  //RX
 			if (0 == ret)
 			{
 				printf("[file - %s] RX md5 value:\n", AST_RX_FILE);
@@ -586,9 +595,7 @@ void Srv2dev_query(int Server_actioncode)
 				cout << "v_Splitstr[mac_cycle].at(0)" << v_Splitstr[mac_cycle].at(0) << endl;
 				if(v_Splitstr[mac_cycle].at(0) == 'T')  //比较TX文件
 				{	
-					printf("wwwwwwwwwwwwww\n");
-					cout << "tx_md5_str:" << tx_md5_str << endl;
-					cout << "m_vdevdata[0]:" << m_vdevdata[0] << endl;
+					
 					if(m_vdevdata[0] == tx_md5_str)
 					{
 						dev_data_query += "N" + vmac_ip[cycle][0] + ",";
@@ -644,27 +651,36 @@ void Srv2dev_query(int Server_actioncode)
 					do_put(AST_RX_FILE);
 				
 				//发送升级设备命令
-				//data_packing_todev(Server_update_device, 0, "", message_timeid()); 
-				//m_sdata2dev_bak.assign(m_sdata2dev);
-				//sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
-				//dev2srv_json_check();	
+				data_packing_todev(Server_update_device, 0, "", message_timeid()); 
+				m_sdata2dev_bak.assign(m_sdata2dev);
+				sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
+				dev2srv_json_check();	
 				
+				if(m_vdevcode[0] == Dev_update_end)  
+				{
+					//写md5值
+					printf("writing MD5!\n");
+					
+					if(v_deal_type[cycle] == 'T')
+						data_packing_todev(Server_write_md5Value, 0, tx_md5_str, message_timeid());
+					else
+						data_packing_todev(Server_write_md5Value, 0, rx_md5_str, message_timeid());
+					m_sdata2dev_bak.assign(m_sdata2dev);
+					sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
+					dev2srv_json_check();
+					
+					if(m_vdevcode[0] == Dev_reply_wmd5Value){ //写MD5成功
+					
+						printf("writing MD5 end~~~~~~~!\n");
+						m_endflag = 1;
+						raise(SIGUSR1);
+						
+					}
+				}
 				
 				usleep(20000);
 			}
 			
-			v_deal_ip.clear();   //结束时全部清空
-			v_deal_type.clear();
-			v_deal_mac.clear();
-			break;
-
-		case Server_write_md5Value:  //发送写md5的命令
-			
-			data_packing_todev(Server_write_md5Value, 0, m_vpcdata[0], message_timeid());
-			m_sdata2dev_bak.assign(m_sdata2dev);
-			sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
-			dev2srv_json_check();
-		
 			v_deal_ip.clear();   //结束时全部清空
 			v_deal_type.clear();
 			v_deal_mac.clear();
@@ -686,7 +702,7 @@ void Srv2dev_query(int Server_actioncode)
 			break;
 			
 	}
-	
+		
 	close(dev_fd);	
 }
 
@@ -1159,30 +1175,13 @@ void do_get(char *file_name)
 	
 	while(1){
 	
-		for(time_wait_data = 0; time_wait_data < PKT_RCV_TIMEOUT * PKT_MAX_RXMT; time_wait_data += 10000){  //响应时间
-			r_size = recvfrom(fd_udp, &Recv_packet, sizeof(struct Transfer_packet), MSG_DONTWAIT, (struct sockaddr *)&srvaddr, &len); //无阻塞
-			
-			if(r_size > 0 && r_size < 12) //数据包不足12
-			{
-				printf("Bad packet:%d\n",r_size);
-				Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
-				sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&srvaddr, len);
-			}
-			
-			if(r_size >= 12)
-			{
-				printf("\n");
-				printf("recvfrom r_size:%d\n",r_size);
-				break;
-			}
-			
-			usleep(10000);
-		}
+		r_size = recvfrom(fd_udp, &Recv_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, &len); //无阻塞
 		
-		if(time_wait_data >= PKT_RCV_TIMEOUT * PKT_MAX_RXMT){  //超时退出
-			printf("Wait for DATA timeout.\n");
-			fclose(get_fp);
-			return;
+		if(r_size > 0 && r_size < 12) //数据包不足12
+		{
+			printf("Bad packet:%d\n",r_size);
+			Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
+			sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&srvaddr, len);
 		}
 		else{
 			printf("Recv_packet.packet_head.ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
@@ -1268,7 +1267,7 @@ void catch_sig(int sig)
 	char *sig_parse;
 	string sig_str;
 	
-	printf("catch_sig\n");
+	//printf("catch_sig\n");
 	
 	memset(sig_json, 0, 512);
 	//m_vpccode.clear();
@@ -1293,7 +1292,7 @@ void catch_sig(int sig)
 	}
 	sig_len = recvfrom(fd_udp, sig_json, sizeof(sig_json), 0, (struct sockaddr *)&srvaddr, &len);	
 
-	printf("sig_len:%d\n",sig_len);
+	//printf("sig_len:%d\n",sig_len);
 
 	sig_parse = (char *)malloc(sig_len);
 	memset(sig_parse, 0, sig_len);
@@ -1452,13 +1451,9 @@ int main(int argc, char *argv[])
 						m_sdata2PC_bak.assign(m_sdata2PC);
 						sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
 						
-						//操作2：开始文件传输 PC ← Server ↔ Dev ，并升级设备
+						//操作2：开始文件传输 PC ← Server ↔ Dev ，并升级设备，接着写入MD5值
 						Srv2dev_query(Server_start_file_tran);
-						
-						//操作3：写入MD5值
-						
-						
-						
+					
 					}
 					break;
 			

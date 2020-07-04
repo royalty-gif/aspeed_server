@@ -33,9 +33,6 @@
 using namespace std;
 using namespace rapidjson;
 
-//判断是否为TX
-bool isTX;
-
 //记录灯的状态变量
 static int led_status = 0;
 
@@ -91,21 +88,13 @@ void do_get(void)
 	unsigned short data_len = 0;
 	unsigned char rcv_crc = 0;
 	
-	if(isTX){
-		get_fp = fopen(AST_TX_FILE, "w");
-		if(get_fp == NULL){
-			printf("Create file \"%s\" error.\n", AST_TX_FILE);
-			return;
-		}
-	}
-	else{
-		get_fp = fopen(AST_RX_FILE, "w");
-		if(get_fp == NULL){
-			printf("Create file \"%s\" error.\n", AST_RX_FILE);
-			return;
-		}
-	}
 	
+	get_fp = fopen(AST_FILE_NAME, "w");
+	if(get_fp == NULL){
+		printf("Create file \"%s\" error.\n", AST_FILE_NAME);
+		return;
+	}
+
 	while(1){
 		for(time_wait_data = 0; time_wait_data < PKT_RCV_TIMEOUT * PKT_MAX_RXMT; time_wait_data += 10000){  //等待响应
 			r_size = recvfrom(fd, &Recv_packet, sizeof(struct Transfer_packet), MSG_DONTWAIT, (struct sockaddr *)&addr, &addr_len);
@@ -184,7 +173,7 @@ void do_get(void)
 				
 				case AST_CANCEL_TRAN: //取消数据传输的指令
 					tran_status = 0;
-					remove(AST_TX_FILE);
+					remove(AST_FILE_NAME);
 					Send_packet.packet_head.ex_data[0] = AST_REPLY_CANCEL_TRAN;
 					sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
 					break;
@@ -379,18 +368,7 @@ int main(int argc, char*argv[])
 	
 	char recv_json[512];
 	char *parse_json_data;
-	
-	if(argc != 2)
-	{
-		printf("usage: ./dev_process TX/RX!\n");
-		return 0;
-	}
-	
-	if(!strncmp(argv[1], "TX", 2))
-		isTX = 1;
-	else
-		isTX = 0;
-    printf("argv[1]:%s\n",argv[1]);
+
 	//UDP连接
 	fd = Socket(AF_INET, SOCK_DGRAM, 0);
 	
@@ -473,11 +451,12 @@ int main(int argc, char*argv[])
 					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
 					
 					//升级过程
-					system("./update.sh > /dev/shm/uf 2>/dev/shm/uf_e");
+					system("/update.sh");
 					//设备升级完成
 					data_packing_toSrv(Dev_update_end, 200, m_vsrvid[0]);
 					m_sdata2Srv_bak.assign(m_sdata2Srv);
 					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
+					
 					break;
 					
 				//写入MD5值	
