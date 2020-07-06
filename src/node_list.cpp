@@ -337,7 +337,7 @@ void dev2srv_json_check(void)
 		
 		if(m_vdevcode[0] == COMMAND_REFUSE){
 			sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
-			break;
+			continue;
 		}
 		
 		if(m_vdevres[0] == 200 || m_vdevres[0] == 100)
@@ -406,7 +406,7 @@ void do_put(char *file_name)
 		for(rxmt = 0; rxmt < PKT_MAX_RXMT; rxmt++){  //最大次数3
 			
 			//等待响应
-			for(time_wait_ack = 0; time_wait_ack < PKT_RCV_TIMEOUT; time_wait_ack += 20000){  
+			for(time_wait_ack = 0; time_wait_ack < PKT_RCV_TIMEOUT; time_wait_ack += 20000){  //最大响应3s
 				r_size = recvfrom(dev_fd, &Recv_packet, sizeof(struct Transfer_packet_head), MSG_DONTWAIT, (struct sockaddr *)&pdev_addr, &pdevaddr_len);
 				
 				if(r_size == 12)
@@ -419,9 +419,10 @@ void do_put(char *file_name)
 				//printf("recvfrom r_size:%d\n",r_size);
 				//printf("crc:%#x\n",Recv_packet.packet_head.ex_data[4]);
 				
-				//printf("ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
+				printf("ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
 				break;
-			}else{
+			}
+			else{
 				// Retransmission.
 				
 				sendto(dev_fd, &Send_packet_bak, size_bak, 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
@@ -432,6 +433,12 @@ void do_put(char *file_name)
 				
 				continue;
 			}
+		}
+		
+		if(rxmt == PKT_MAX_RXMT)
+		{
+			fclose(put_fp);
+			return;
 		}
 		switch(Recv_packet.packet_head.ex_data[0])
 		{
@@ -665,6 +672,7 @@ void Srv2dev_query(int Server_actioncode)
 						data_packing_todev(Server_write_md5Value, 0, tx_md5_str, message_timeid());
 					else
 						data_packing_todev(Server_write_md5Value, 0, rx_md5_str, message_timeid());
+						
 					m_sdata2dev_bak.assign(m_sdata2dev);
 					sendto(dev_fd, m_sdata2dev.data(), m_sdata2dev.length(), 0, (struct sockaddr *)&pdev_addr, pdevaddr_len);
 					dev2srv_json_check();

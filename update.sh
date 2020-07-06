@@ -62,7 +62,7 @@ async_update()
 	reboot
 }
 
-/usr/local/bin/ast_send_event -1 e_stop_link
+
 
 cd /dev/shm
 # Remove all fw files if exists

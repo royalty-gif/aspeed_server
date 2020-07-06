@@ -43,7 +43,7 @@ string m_sdata2Srv_bak;
 int is_md5 = 0;
 
 //md5值
-char md5_data[32];
+char md5_data[128];
 
 //创建收集服务器信息的容器
 vector<string> m_vsrvdata;
@@ -96,30 +96,14 @@ void do_get(void)
 	}
 
 	while(1){
-		for(time_wait_data = 0; time_wait_data < PKT_RCV_TIMEOUT * PKT_MAX_RXMT; time_wait_data += 10000){  //等待响应
-			r_size = recvfrom(fd, &Recv_packet, sizeof(struct Transfer_packet), MSG_DONTWAIT, (struct sockaddr *)&addr, &addr_len);
-			
-			if(r_size > 0 && r_size < 12) //数据包不足12
-			{
-				printf("Bad packet:%d\n",r_size);
-				Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
-				sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
-			}
-			
-			if(r_size >= 12)
-			{
-				printf("\n");
-				printf("recvfrom r_size:%d\n",r_size);
-				break;
-			}
-			
-			usleep(10000);
-		}
 		
-		if(time_wait_data >= PKT_RCV_TIMEOUT * PKT_MAX_RXMT){  //超时退出
-			printf("Wait for DATA timeout.\n");
-			fclose(get_fp);
-			return;
+		r_size = recvfrom(fd, &Recv_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, &addr_len);
+		
+		if(r_size > 0 && r_size < 12) //数据包不足12
+		{
+			printf("Bad packet:%d\n",r_size);
+			Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
+			sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
 		}
 		else{
 			printf("Recv_packet.packet_head.ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
@@ -385,7 +369,9 @@ int main(int argc, char*argv[])
 		memset(recv_json, 0, sizeof(recv_json));
 		m_vsrvcode.clear();
 		m_vsrvid.clear();
+		printf("wwwwwwwwww\n");
 		m_vsrvdata.clear();
+		printf("wwwwww222222222\n");
 		
 		buf_len = recvfrom(fd, &recv_json, sizeof(recv_json), 0, (struct sockaddr *)&addr, &addr_len);
 		printf("buf_len:%d\n",buf_len);
@@ -438,6 +424,7 @@ int main(int argc, char*argv[])
 					data_packing_toSrv(Dev_ready_filercv, 200, m_vsrvid[0]);
 					m_sdata2Srv_bak.assign(m_sdata2Srv);
 					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
+					system("/usr/local/bin/ast_send_event -1 e_stop_link");
 					
 					//文件传输操作
 					do_get();
@@ -451,7 +438,7 @@ int main(int argc, char*argv[])
 					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
 					
 					//升级过程
-					system("/update.sh");
+					//system("/update.sh");
 					//设备升级完成
 					data_packing_toSrv(Dev_update_end, 200, m_vsrvid[0]);
 					m_sdata2Srv_bak.assign(m_sdata2Srv);
@@ -461,7 +448,10 @@ int main(int argc, char*argv[])
 					
 				//写入MD5值	
 				case Server_write_md5Value:
-					sprintf(md5_data, "astparam s md5 %s", m_vsrvdata[0].c_str());
+				{
+					string write_str = "astparam s md5 " + m_vsrvdata[0];
+					
+					write_str.copy(md5_data, write_str.size(), 0);
 					system(md5_data);
 					system("astparam save");
 					
@@ -470,7 +460,8 @@ int main(int argc, char*argv[])
 					m_sdata2Srv_bak.assign(m_sdata2Srv);
 					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
 					break;
-					
+				}
+				
 				//闪烁红灯(√)
 				case Server_trigger_redled:
 					if(!led_status){
