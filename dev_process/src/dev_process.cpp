@@ -39,9 +39,6 @@ static int led_status = 0;
 //备份一份发送信息
 string m_sdata2Srv_bak;
 
-//判断是否存在md5的变量
-int is_md5 = 0;
-
 //md5值
 char md5_data[128];
 
@@ -97,13 +94,28 @@ void do_get(void)
 
 	while(1){
 		
-		r_size = recvfrom(fd, &Recv_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&addr, &addr_len);
+		for(time_wait_data = 0; time_wait_data < PKT_RCV_TIMEOUT * PKT_MAX_RXMT; time_wait_data += 10000){
+			r_size = recvfrom(fd, &Recv_packet, sizeof(struct Transfer_packet), MSG_DONTWAIT, (struct sockaddr *)&addr, &addr_len);
 		
-		if(r_size > 0 && r_size < 12) //数据包不足12
+			if(r_size > 0 && r_size < 12) //数据包不足12
+			{
+				printf("Bad packet:%d\n",r_size);
+				Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
+				sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
+			}
+			
+			if(r_size >= 12){
+				break;
+			}
+			
+			usleep(10000);
+		}
+		
+		if(time_wait_data >= PKT_RCV_TIMEOUT * PKT_MAX_RXMT)  //超时
 		{
-			printf("Bad packet:%d\n",r_size);
-			Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
-			sendto(fd, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&addr, addr_len);
+			printf("Wait for DATA timeout.\n");
+			remove(AST_FILE_NAME);
+			goto do_get_error;
 		}
 		else{
 			printf("Recv_packet.packet_head.ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
@@ -175,10 +187,12 @@ void do_get(void)
 		
 		if(Recv_packet.packet_head.ex_data[0] == AST_CANCEL_TRAN || 
 				 Recv_packet.packet_head.ex_data[0] == AST_END_TRAN){
-			fclose(get_fp);
 			break;
 		}
 	}
+do_get_error:
+	fclose(get_fp);
+	
 }
 
 
@@ -214,30 +228,26 @@ void data_packing_toSrv(int user_actioncode, int result, int msg_id)
 	switch(user_actioncode)  
 	{
 		case Dev_reply_md5Value:
-			if(result == 200)
+			
+			doc.AddMember("result", 200, allocator);
+			doc.AddMember("return_message", "md5 value", allocator);
+			
+			fp = popen("astparam g md5", "r");
+			if(fp == NULL)
 			{
-				doc.AddMember("result", 200, allocator);
-				doc.AddMember("return_message", "md5 value", allocator);
-				
-				fp = popen("astparam g md5", "r");
-				if(fp == NULL)
-				{
-					printf("popen error!\n");
-					exit(-1);
-				}
-				while(fgets(md5_data, sizeof(md5_data), fp) != NULL)
-				{
+				printf("popen error!\n");
+				exit(-1);
+			}
+			while(fgets(md5_data, sizeof(md5_data), fp) != NULL)
+			{
+				if(!strncmp(md5_data, "\"md5\"", 5))
+					doc.AddMember("data", "", allocator);
+				else{
 					data_log = md5_data;
 					s = StringRef(data_log.c_str());
 					doc.AddMember("data", s, allocator);
-					break;
 				}
-			}
-			else if(result == 100)  //无MD5的情况
-			{
-				doc.AddMember("result", 100, allocator);
-				doc.AddMember("return_message", "md5 value", allocator);
-				doc.AddMember("data", "", allocator);
+				break;
 			}
 			break;
 			
@@ -369,9 +379,7 @@ int main(int argc, char*argv[])
 		memset(recv_json, 0, sizeof(recv_json));
 		m_vsrvcode.clear();
 		m_vsrvid.clear();
-		printf("wwwwwwwwww\n");
 		m_vsrvdata.clear();
-		printf("wwwwww222222222\n");
 		
 		buf_len = recvfrom(fd, &recv_json, sizeof(recv_json), 0, (struct sockaddr *)&addr, &addr_len);
 		printf("buf_len:%d\n",buf_len);
@@ -410,11 +418,7 @@ int main(int argc, char*argv[])
 			{
 				//返回MD5值
 				case Server_get_md5value:
-					if(is_md5)
-						data_packing_toSrv(Dev_reply_md5Value, 200, m_vsrvid[0]);
-					else
-						data_packing_toSrv(Dev_reply_md5Value, 100, m_vsrvid[0]);
-					
+					data_packing_toSrv(Dev_reply_md5Value, 200, m_vsrvid[0]);
 					m_sdata2Srv_bak.assign(m_sdata2Srv);	
 					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
 					break;
@@ -438,7 +442,7 @@ int main(int argc, char*argv[])
 					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);
 					
 					//升级过程
-					//system("/update.sh");
+					system("/update.sh");
 					//设备升级完成
 					data_packing_toSrv(Dev_update_end, 200, m_vsrvid[0]);
 					m_sdata2Srv_bak.assign(m_sdata2Srv);
@@ -454,8 +458,7 @@ int main(int argc, char*argv[])
 					write_str.copy(md5_data, write_str.size(), 0);
 					system(md5_data);
 					system("astparam save");
-					
-					is_md5 = 1; //标志为1
+	
 					data_packing_toSrv(Dev_reply_wmd5Value, 200, m_vsrvid[0]);
 					m_sdata2Srv_bak.assign(m_sdata2Srv);
 					sendto(fd, m_sdata2Srv.data(), m_sdata2Srv.length(), 0, (struct sockaddr *)&addr, addr_len);

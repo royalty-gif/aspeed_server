@@ -39,6 +39,7 @@ int m_size = 0; //传输的大小
 string m_mac; //记录升级的设备mac地址
 int m_stflag = 0;   //状态标志
 int m_endflag = 0;   //结束标志
+int m_errflag = 0, m_errputflag = 0;	//错误标志
 
 int tmp_number = 0;  //临时测试变量
 int tmp_size = 0;
@@ -74,7 +75,7 @@ static string m_sdata2PC;
 static string m_sdata2dev;
 
 //服务器与PC UDP连接的变量
-static int fd_udp, on=0;
+static int fd_udp;
 static struct sockaddr_in srvaddr;
 static socklen_t len = sizeof(srvaddr);
 
@@ -437,7 +438,15 @@ void do_put(char *file_name)
 		
 		if(rxmt == PKT_MAX_RXMT)
 		{
+			printf("timeout error!\n");
+			package_number = 0;
+			fseek(put_fp, 0L, SEEK_SET); //必须将指针指向开头
+			
 			fclose(put_fp);
+		
+			m_errflag = 1;
+			m_errputflag = 1;
+			raise(SIGUSR1);
 			return;
 		}
 		switch(Recv_packet.packet_head.ex_data[0])
@@ -505,7 +514,7 @@ void do_put(char *file_name)
 				
 			case AST_REPLY_END_TRAN:
 				package_number = 0;
-				fseek(put_fp, 0L, SEEK_SET);
+				fseek(put_fp, 0L, SEEK_SET);  //必须将指针指向开头
 				printf("tmp_number:%d\n",tmp_number);
 				printf("tmp_size:%d\n",tmp_size);
 				
@@ -602,7 +611,7 @@ void Srv2dev_query(int Server_actioncode)
 				cout << "v_Splitstr[mac_cycle].at(0)" << v_Splitstr[mac_cycle].at(0) << endl;
 				if(v_Splitstr[mac_cycle].at(0) == 'T')  //比较TX文件
 				{	
-					
+					cout << "m_vdevdata[0]" << m_vdevdata[0] << endl;
 					if(m_vdevdata[0] == tx_md5_str)
 					{
 						dev_data_query += "N" + vmac_ip[cycle][0] + ",";
@@ -657,6 +666,11 @@ void Srv2dev_query(int Server_actioncode)
 				else
 					do_put(AST_RX_FILE);
 				
+				if(m_errputflag){
+					m_errputflag = 0;
+					continue;
+				}
+					
 				//发送升级设备命令
 				data_packing_todev(Server_update_device, 0, "", message_timeid()); 
 				m_sdata2dev_bak.assign(m_sdata2dev);
@@ -1182,14 +1196,28 @@ void do_get(char *file_name)
 	}
 	
 	while(1){
-	
-		r_size = recvfrom(fd_udp, &Recv_packet, sizeof(struct Transfer_packet), 0, (struct sockaddr *)&srvaddr, &len); //无阻塞
+		for(time_wait_data = 0; time_wait_data < PKT_RCV_TIMEOUT * PKT_MAX_RXMT; time_wait_data += 10000){
+			r_size = recvfrom(fd_udp, &Recv_packet, sizeof(struct Transfer_packet), MSG_DONTWAIT, (struct sockaddr *)&srvaddr, &len); //无阻塞
 		
-		if(r_size > 0 && r_size < 12) //数据包不足12
+			if(r_size > 0 && r_size < 12) //数据包不足12
+			{
+				printf("Bad packet:%d\n",r_size);
+				Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
+				sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&srvaddr, len);
+			}
+			
+			if(r_size >= 12){
+				break;
+			}
+			
+			usleep(10000);
+		}
+		
+		if(time_wait_data >= PKT_RCV_TIMEOUT * PKT_MAX_RXMT)  //超时
 		{
-			printf("Bad packet:%d\n",r_size);
-			Send_packet.packet_head.ex_data[0] = AST_CHECK_FAILED;
-			sendto(fd_udp, &Send_packet, sizeof(struct Transfer_packet_head), 0, (struct sockaddr *)&srvaddr, len);
+			printf("Wait PC for DATA timeout.\n");
+			remove(file_name);
+			goto do_get_error;
 		}
 		else{
 			printf("Recv_packet.packet_head.ex_data[0]:%#x\n",Recv_packet.packet_head.ex_data[0]);
@@ -1260,10 +1288,12 @@ void do_get(char *file_name)
 		
 		if(Recv_packet.packet_head.ex_data[0] == AST_CANCEL_TRAN || 
 				 Recv_packet.packet_head.ex_data[0] == AST_END_TRAN){
-			fclose(get_fp);
+			
 			break;
 		}
 	}
+do_get_error:
+	fclose(get_fp);
 }
 
 /***********取消升级和发送升级状态给PC的信号函数****************/
@@ -1278,9 +1308,6 @@ void catch_sig(int sig)
 	//printf("catch_sig\n");
 	
 	memset(sig_json, 0, 512);
-	//m_vpccode.clear();
-	//m_vpcid.clear();
-	//m_vpcdata.clear();
 	sig_str.clear();	
 	
 	
@@ -1291,11 +1318,19 @@ void catch_sig(int sig)
 		sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
 	}
 	
-	if(m_endflag){
+	if(m_endflag){  //完成状态
 		m_endflag = 0;
 		sig_str = m_mac;
 		m_size = 0;
 		data_packing_toPC(sig_str, Server_return_update_end, 200, message_timeid());
+		sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
+	}
+	
+	if(m_errflag){  //错误情况
+		m_errflag = 0;
+		sig_str = m_mac + "," + to_string(-1);
+		m_size = 0;
+		data_packing_toPC(sig_str, Server_return_update_status, 200, message_timeid());
 		sendto(fd_udp, m_sdata2PC.data(), m_sdata2PC.length(), 0, (struct sockaddr *)&srvaddr, len);
 	}
 	sig_len = recvfrom(fd_udp, sig_json, sizeof(sig_json), 0, (struct sockaddr *)&srvaddr, &len);	
@@ -1310,13 +1345,7 @@ void catch_sig(int sig)
 	switch(m_vpccode[0])
 	{
 		case PC_cancel_update:
-			on = 0;
-			ret = ioctl(fd_udp, FIOASYNC, &on);  //工作在异步模式
-			if(ret < 0)
-			{
-				perror("ioctl error\n");
-				exit(-1);
-			}
+			/*需要再补充*/
 			break;
 		
 		case PC_reply_update_status:
